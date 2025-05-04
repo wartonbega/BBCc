@@ -1,0 +1,5 @@
+func toto (() -> Int a) -> Int {
+    let f = func (Int a, Int b) -> {a + b}
+    let c = a + b + d
+    a
+}

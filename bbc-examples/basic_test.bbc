@@ -1,0 +1,5 @@
+func _main () Int {    
+    let b
+    b = 68
+    b
+}

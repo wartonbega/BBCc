@@ -1,0 +1,20 @@
+use package.subpackage # pck
+
+// Tout ça ne veut rien dire.
+// Mais permet de tester si le parsing
+// fonctionne
+
+enum Types {
+    int,
+    string{
+        Int length,
+        Int basepointer
+    }
+}
+
+func toto (mut Int* a, (Int, String, Bool)->Int b ) -> (Int, Int) -> Int {
+    -1 + toto(1, 2 + 3) ? Err() {
+        code
+    }
+    
+}
