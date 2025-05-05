@@ -62,29 +62,6 @@ pub const Context = struct {
             return self.variables.contains(name) or parent.variableExist(name);
         return self.variables.contains(name);
     }
-
-    //pub fn variableExistLLVM(self: *Context, name: []const u8) bool {
-    //    if (self.parent) |parent|
-    //        return self.variable_ptr_llvm.contains(name) or parent.variableExistLLVM(name);
-    //    return self.variable_ptr_llvm.contains(name);
-    //}
-    //
-    //pub fn setVariableLLVM(self: *Context, name: []const u8, t: types.LLVMValueRef) !void {
-    //    if (self.variable_ptr_llvm.contains(name)) {
-    //        try self.variable_ptr_llvm.put(name, t);
-    //    } else if (self.parent) |parent| {
-    //        try parent.setVariableLLVM(name, t);
-    //    }
-    //    try self.variable_ptr_llvm.put(name, t);
-    //}
-    //
-    //pub fn getVariableLLVM(self: *Context, name: []const u8) types.LLVMValueRef {
-    //    if (self.parent) |parent| {
-    //        if (parent.variableExistLLVM(name))
-    //            return parent.getVariableLLVM(name);
-    //    }
-    //    return self.variable_ptr_llvm.get(name).?;
-    //}
 };
 
 pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Allocator, rightType: Types.Type) !void {
@@ -225,5 +202,17 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         switch (inst.*) {
             .FuncDef => try analyseFunction(inst.FuncDef, ctx, allocator),
         }
+    }
+    if (!ctx.variableExist("main"))
+        errors.bbcErrorExit("Missing function 'main'", .{}, "");
+
+    switch (ctx.getVariable("main").decided.base.*) {
+        .function => |f| {
+            if (!f.retype.match((try Types.CreateTypeInt(allocator, true)).decided))
+                errors.bbcErrorExit("The function 'main' should return !Int (or matching)", .{}, "");
+            if (f.argtypes.items.len != 0)
+                errors.bbcErrorExit("'main' function takes no arguements", .{}, "");
+        },
+        .name => errors.bbcErrorExit("'main' should be a function returning !Int", .{}, ""),
     }
 }

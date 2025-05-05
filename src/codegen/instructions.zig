@@ -1,13 +1,15 @@
 const std = @import("std");
 
 const Prog = std.ArrayList(Instructions);
-const Array = std.ArrayList(Instructions);
+const InstArray = std.ArrayList(Instructions);
+const Array = std.ArrayList;
 const HashMap = std.StringArrayHashMap(Value);
 const Allocator = std.mem.Allocator;
 
 pub const Location = union(enum) {
     stack: i64,
     register: Registers,
+    label: []const u8,
     void: void,
 };
 
@@ -65,7 +67,7 @@ pub const Type = union(enum) {
     stringType: void,
     charType: void,
     pointer: *Type,
-    declarefunc: []const u8,
+    declarefunc: void,
     structType: struct {
         habitants: []const Type,
     },
@@ -81,24 +83,35 @@ pub const Instructions = union(enum) {
         y: Value,
     },
     reserveStack: i64,
-    Return: struct { value: Value },
+    Return: Location,
     Function: []const u8,
     Move: struct { from: Location, to: Location },
     IntLit: struct { val: i64, to: Location },
     ExitWith: Location,
     Comment: []const u8,
+    Funcall: struct {
+        func: Location,
+        args: Array(Location),
+    },
 
     pub fn print(self: *const Instructions) void {
         switch (self.*) {
             .Plus => |inst| std.debug.print("\tPlus({}, {})\n", .{ inst.x, inst.y }),
             .Minus => |inst| std.debug.print("\tMinus({}, {})\n", .{ inst.x, inst.y }),
             .reserveStack => |inst| std.debug.print("\tReserveStack({d})\n", .{inst}),
-            .Return => |inst| std.debug.print("\tReturn({})\n", .{inst.value}),
+            .Return => |inst| std.debug.print("\tReturn({})\n", .{inst}),
             .Function => |inst| std.debug.print("Function {s}\n", .{inst}),
             .Move => |inst| std.debug.print("\tMove {} to {}\n", .{ inst.from, inst.to }),
             .IntLit => |inst| std.debug.print("\tIntlit {d} in {}\n", .{ inst.val, inst.to }),
             .ExitWith => |inst| std.debug.print("\tExit({})\n", .{inst}),
             .Comment => |comment| std.debug.print("\t// {s}\n", .{comment}),
+            .Funcall => |func| {
+                std.debug.print("\tCall {}(", .{func.func});
+                for (func.args.items) |a| {
+                    std.debug.print("{}, ", .{a});
+                }
+                std.debug.print(")\n", .{});
+            },
         }
     }
 };

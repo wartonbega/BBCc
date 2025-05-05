@@ -34,43 +34,83 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
 
     const writer = file.writer();
 
-    _ = try writer.write("default rel\n\nsection .text\n\tglobal _main\n");
+    //_ = try writer.write("%macro LOAD_ADDRESS 2\n\tadrp %1, %2@PAGE\n\tadd  %1, %1, %2@PAGEOFF\n%endmacro\n");
+    _ = try writer.write("default rel\nsection .text align=16\n\tglobal main\n");
+    var stacktop: i64 = @intCast(-8);
     for (builder.code.items) |instruction| {
         switch (instruction) {
             //.Plus => |inst| writer.writeAll("\tPlus({}, {})\n"),
             //.Minus => |inst| writer.writeAll("\tMinus({}, {})\n"),
-            .Function => |fname| try writer.print("{s}:\n", .{fname}),
-            .reserveStack => |inst| try writer.print("\tadd rsp, {d}\n", .{-inst}),
+            .Function => |fname| try writer.print("\n{s}:\n", .{fname}),
+            .reserveStack => |inst| {
+                try writer.print("\tadd rsp, {d}\n", .{-inst});
+                stacktop += inst;
+                std.debug.print("{d}\n", .{stacktop});
+            },
             .Move => |inst| {
-                try writer.print("\tmov ", .{});
-                switch (inst.to) {
-                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
-                    .stack => |d| try writer.print("qword [rsp + {d}], ", .{d}),
-                    .void => unreachable,
-                }
-                switch (inst.from) {
-                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
-                    .stack => |d| try writer.print("qword [rsp + {d}]\n", .{d}),
-                    .void => unreachable,
+                if (inst.to == .register and inst.from == .label) {
+                    try writer.print("\tlea {s}, {s}\n", .{ reg(inst.to.register), inst.from.label });
+                } else {
+                    try writer.print("\tmov ", .{});
+                    switch (inst.to) {
+                        .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                        .stack => |d| try writer.print("qword [rsp + {d}], ", .{stacktop - d}),
+                        .label => |l| try writer.print("qword {s}", .{l}),
+                        .void => unreachable,
+                    }
+                    switch (inst.from) {
+                        .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                        .stack => |d| try writer.print("qword [rsp + {d}]\n", .{stacktop - d}),
+                        .label => |l| try writer.print("{s}\n", .{l}),
+                        .void => unreachable,
+                    }
                 }
             },
             .IntLit => |inst| {
                 switch (inst.to) {
                     .register => |r| try writer.print("\tmov {s}, {d}\n", .{ reg(r), inst.val }),
-                    .stack => |d| try writer.print("\tmov qword [rsp + {d}], {d}\n", .{ d, inst.val }),
+                    .stack => |d| try writer.print("\tmov qword [rsp + {d}], {d}\n", .{ stacktop - d, inst.val }),
+                    .label => |l| try writer.print("\tmov qword {s}, {d}\n", .{ l, inst.val }),
                     .void => unreachable,
                 }
             },
             .ExitWith => |inst| {
                 switch (inst) {
                     .register => |r| try writer.print("\tmov rdi, {s}\n", .{reg(r)}),
-                    .stack => |d| try writer.print("\tmov rdi, qword [rsp + {d}]\n", .{d}),
+                    .stack => |d| try writer.print("\tmov rdi, qword [rsp + {d}]\n", .{stacktop - d}),
+                    .label => |l| try writer.print("\tmov rdi, {s}\n", .{l}),
                     .void => unreachable,
                 }
                 try writer.print("\tmov rax, 0x2000001\n", .{});
                 try writer.print("\tsyscall\n", .{});
             },
+            .Return => |ret| {
+                switch (ret) {
+                    .register => |r| try writer.print("\tmov rax, {s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("\tmov rax, qword [rsp + {d}]\n", .{stacktop - d}),
+                    .label => |l| try writer.print("\tmov rax, {s}\n", .{l}),
+                    .void => unreachable,
+                }
+                _ = try writer.write("\tret\n");
+            },
             .Comment => {},
+            .Funcall => |funcall| {
+                for (funcall.args.items, Inst.RegIter[0..funcall.args.items.len]) |arg, destreg| {
+                    try writer.print("\tmov {s}, ", .{reg(destreg)});
+                    switch (arg) {
+                        .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                        .stack => |d| try writer.print("qword [rsp + {d}]\n", .{stacktop - d}),
+                        .label => |l| try writer.print("qword {s}\n", .{l}),
+                        .void => unreachable,
+                    }
+                }
+                switch (funcall.func) {
+                    .label => |l| try writer.print("\tcall {s}\n", .{l}),
+                    .register => |r| try writer.print("\tcall {s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("\tcall qword [rsp + {d}]\n", .{stacktop - d}),
+                    else => unreachable,
+                }
+            },
             else => unreachable,
         }
     }
