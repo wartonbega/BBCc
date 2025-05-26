@@ -1,7 +1,6 @@
 
-func main () Int {    
-    let b
-    let a = 69
-    b = a + a
-    b
+func main () Int { 
+    let a = 70   
+    let b = a == 70
+    a - 1
 }

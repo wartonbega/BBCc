@@ -8,8 +8,17 @@ const ArrayList = std.ArrayList;
 
 // All the traits
 pub const Trait = enum {
-    Eq,
     Add,
+    Sub,
+    Mult,
+    Div,
+    Mod,
+    Eq,
+    GrEq,
+    LeEq,
+    Le,
+    Gr,
+
     Display,
 };
 
@@ -19,34 +28,49 @@ const TypeTraitHashmap = std.hash_map.StringHashMap(ArrayList(Trait));
 pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !void {
     // Create the Int type
     var int_traits = ArrayList(Trait).init(allocator);
+    const int_type = try Types.CreateTypeInt(allocator, false);
+    const bool_type = try Types.CreateTypeBool(allocator, false);
     try int_traits.append(Trait.Add);
+    try int_traits.append(Trait.Sub);
+    try int_traits.append(Trait.Mult);
+    try int_traits.append(Trait.Div);
+    try int_traits.append(Trait.Mod);
     try int_traits.append(Trait.Eq);
+    try int_traits.append(Trait.GrEq);
+    try int_traits.append(Trait.LeEq);
+    try int_traits.append(Trait.Le);
+    try int_traits.append(Trait.Gr);
 
     try ctx.trait_map.put("Int", int_traits);
 
     var int_implems = ArrayList(analyser.funcPair).init(allocator);
-    try int_implems.append(.{
-        .name = ast.binOpFuncName(.Plus),
-        .signature = ast.TypeFunc{
-            .argtypes = blk: {
-                var args = ArrayList(*ast.Type).init(allocator);
-                try args.append((try Types.CreateTypeInt(allocator, false)).decided);
-                break :blk args;
+    for ([_]ast.binOperator{ .Plus, .Minus, .Times, .Div, .Modulus }) |op| {
+        try int_implems.append(.{
+            .name = ast.binOpFuncName(op),
+            .signature = ast.TypeFunc{
+                .argtypes = blk: {
+                    var args = ArrayList(*ast.Type).init(allocator);
+                    try args.append(int_type.decided);
+                    break :blk args;
+                },
+                .retype = int_type.decided,
             },
-            .retype = (try Types.CreateTypeInt(allocator, false)).decided,
-        },
-    });
-    try int_implems.append(.{
-        .name = ast.binOpFuncName(.Equal),
-        .signature = ast.TypeFunc{
-            .argtypes = blk: {
-                var args = ArrayList(*ast.Type).init(allocator);
-                try args.append((try Types.CreateTypeInt(allocator, false)).decided);
-                break :blk args;
+        });
+    }
+    for ([_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt }) |op| {
+        try int_implems.append(.{
+            .name = ast.binOpFuncName(op),
+            .signature = ast.TypeFunc{
+                .argtypes = blk: {
+                    var args = ArrayList(*ast.Type).init(allocator);
+                    try args.append(int_type.decided);
+                    break :blk args;
+                },
+                .retype = bool_type.decided,
             },
-            .retype = (try Types.CreateTypeInt(allocator, false)).decided,
-        },
-    });
+        });
+    }
+
     try ctx.type_implem.put(
         "Int",
         int_implems,
@@ -107,6 +131,15 @@ pub fn traitFromOperator(op: ast.binOperator) Trait {
     switch (op) {
         .Plus => return Trait.Add,
         .Equal => return Trait.Eq,
+        .Minus => return Trait.Sub,
+        .Times => return Trait.Mult,
+        .Div => return Trait.Div,
+        .Modulus => return Trait.Mod,
+        .NotEqual => return Trait.Eq,
+        .Ge => return Trait.GrEq,
+        .Le => return Trait.LeEq,
+        .Lt => return Trait.Le,
+        .Gt => return Trait.Gr,
         else => unreachable,
     }
 }

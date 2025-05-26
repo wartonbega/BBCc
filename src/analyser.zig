@@ -150,9 +150,12 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
 pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhsType: Types.Type, allocator: Allocator) !Types.Type {
     // It's a bit like calling a the function "lhsName.opName(rhsType) => ?"
     const op_trait = Traits.traitFromOperator(op);
-    if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, lhsType, op_trait))
+    if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, lhsType, op_trait)) {
+        for (ctx.trait_map.get("Int").?.items) |trait| {
+            std.debug.print("{s}", .{@tagName(trait)});
+        }
         errors.bbcErrorExit("Can't use operator '{s}' on type '{s}', because it does implements the right trait", .{ ast.reprBinOp(op), rhsType.toString(allocator) }, "");
-
+    }
     switch (lhsType) {
         .decided => |t| {
             for (ctx.type_implem.get(t.base.name).?.items) |func| {

@@ -19,5 +19,6 @@ pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: []const u8) vo
     stderr.print(val, args) catch {
         return;
     };
+    stderr.print("\n", .{}) catch {};
     exit(0);
 }

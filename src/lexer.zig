@@ -95,8 +95,8 @@ pub fn lexeListedValue(reader: *tokenReader, allocator: Allocator) !ArrayList(*a
     return ret;
 }
 
-pub fn lexeValue5(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // value5:
+pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
+    // Value7:
     //  | IF value0 {scope}
     //  | LET ident
     //  | ident
@@ -184,21 +184,24 @@ pub fn lexeValue5(reader: *tokenReader, allocator: Allocator) !*ast.Value {
             ret.* = ast.Value{ .function = function };
             return ret;
         },
-        else => return lexerError.unimplementedValueType,
+        else => {
+            std.debug.print("{s}\n", .{@tagName((try reader.peek()).type)});
+            return lexerError.unimplementedValueType;
+        },
     }
 }
 
-pub fn lexeValue4(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // value4:
-    //  | value5 ? err : {code}
-    //  | value5
-    const lhs = try lexeValue5(reader, allocator);
+pub fn lexeValue6(reader: *tokenReader, allocator: Allocator) !*ast.Value {
+    // Value6:
+    //  | Value7 ? err : {code}
+    //  | Value7
+    const lhs = try lexeValue7(reader, allocator);
     if (!reader.canPeek())
         return lhs;
     switch ((try reader.peek()).type) {
         TokenType.QUEST => |optype| {
             _ = reader.consume(optype);
-            //const rhs = lexeValue2(reader, allocator);
+            //const rhs = lexeValue3(reader, allocator);
             _ = reader.consume(TokenType.IDENT);
             _ = reader.consume(TokenType.COLON);
             _ = try lexeScope(reader, allocator);
@@ -216,14 +219,14 @@ pub fn lexeValue4(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     return lhs;
 }
 
-pub fn lexeValue3(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // value3:
-    //  | value4 (.IDENT)* // for the future it will be (.IDENT | [value0])*
+pub fn lexeValue5(reader: *tokenReader, allocator: Allocator) !*ast.Value {
+    // Value5:
+    //  | Value6 (.IDENT)* // for the future it will be (.IDENT | [value0])*
 
     // lhs is a variable because the system works by aggregating
     // all the attributes together.
     // For example, a.b.c derives in .c => (.b => (a))
-    var lhs = try lexeValue4(reader, allocator);
+    var lhs = try lexeValue6(reader, allocator);
     if (!reader.canPeek())
         return lhs;
 
@@ -243,11 +246,11 @@ pub fn lexeValue3(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     return lhs;
 }
 
-pub fn lexeValue2bis(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // value2bis:
-    //  | value3(args) # funcall
-    //  | value3
-    const lhs = try lexeValue3(reader, allocator);
+pub fn lexeValue4(reader: *tokenReader, allocator: Allocator) !*ast.Value {
+    // Value4:
+    //  | Value5(args) # funcall
+    //  | Value5
+    const lhs = try lexeValue5(reader, allocator);
     if (!reader.canPeek())
         return lhs;
     switch ((try reader.peek()).type) {
@@ -266,18 +269,18 @@ pub fn lexeValue2bis(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     }
     return lhs;
 }
-pub fn lexeValue2(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // value2:
-    //  | value2bis TIMES value2
-    //  | value2bis DIV   value2
-    //  | value2bis
-    const lhs = try lexeValue2bis(reader, allocator);
+pub fn lexeValue3(reader: *tokenReader, allocator: Allocator) !*ast.Value {
+    // Value3:
+    //  | Value4 TIMES Value3
+    //  | Value4 DIV   Value3
+    //  | Value4
+    const lhs = try lexeValue4(reader, allocator);
     if (!reader.canPeek())
         return lhs;
     switch ((try reader.peek()).type) {
         TokenType.TIMES, TokenType.DIV => |optype| {
             _ = reader.consume(optype);
-            const rhs = try lexeValue2(reader, allocator);
+            const rhs = try lexeValue3(reader, allocator);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.binaryOperation);
             operation.* = ast.binaryOperation{
@@ -297,18 +300,18 @@ pub fn lexeValue2(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     return lhs;
 }
 
-pub fn lexeValue1(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // value1:
-    //  | value2 PLUS  value1
-    //  | value2 MINUS value1
-    //  | value2
-    const lhs = try lexeValue2(reader, allocator);
+pub fn lexeValue2(reader: *tokenReader, allocator: Allocator) !*ast.Value {
+    // Value2:
+    //  | Value3 PLUS  Value2
+    //  | Value3 MINUS Value2
+    //  | Value3
+    const lhs = try lexeValue3(reader, allocator);
     if (!reader.canPeek())
         return lhs;
     switch ((try reader.peek()).type) {
         TokenType.PLUS, TokenType.MINUS => |optype| {
             _ = reader.consume(optype);
-            const rhs = try lexeValue1(reader, allocator);
+            const rhs = try lexeValue2(reader, allocator);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.binaryOperation);
             operation.* = ast.binaryOperation{
@@ -328,13 +331,51 @@ pub fn lexeValue1(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     return lhs;
 }
 
+pub fn lexeValue1(reader: *tokenReader, allocator: Allocator) (lexerError || std.mem.Allocator.Error || std.fmt.ParseIntError)!*ast.Value {
+    // value1:
+    //  | Value2 == value1
+    //  | Value2 != value1
+    //  | Value2 <= value1
+    //  | Value2 >= value1
+    //  | Value2 < value1
+    //  | Value2 > value1
+    //  | value2
+    const lhs = try lexeValue2(reader, allocator);
+    if (!reader.canPeek())
+        return lhs;
+    switch ((try reader.peek()).type) {
+        TokenType.DBL_EQUAL, TokenType.NOT_EQUAL, TokenType.LESS_THAN, TokenType.MORE_THAN, TokenType.MORE_THAN_EQ, TokenType.LESS_THAN_EQ => |optype| {
+            _ = reader.consume(optype);
+            const rhs = try lexeValue1(reader, allocator);
+            const ret = try allocator.create(ast.Value);
+            const operation = try allocator.create(ast.binaryOperation);
+            operation.* = ast.binaryOperation{
+                .lhs = lhs,
+                .rhs = rhs,
+                .operator = switch (optype) {
+                    TokenType.DBL_EQUAL => ast.binOperator.Equal,
+                    TokenType.NOT_EQUAL => ast.binOperator.NotEqual,
+                    TokenType.LESS_THAN => ast.binOperator.Lt,
+                    TokenType.MORE_THAN => ast.binOperator.Gt,
+                    TokenType.MORE_THAN_EQ => ast.binOperator.Ge,
+                    TokenType.LESS_THAN_EQ => ast.binOperator.Le,
+                    else => ast.binOperator.Equal,
+                },
+            };
+            ret.* = ast.Value{ .binaryOperator = operation };
+            return ret;
+        },
+        else => return lhs,
+    }
+    return lhs;
+}
+
 pub fn lexeValue0(reader: *tokenReader, allocator: Allocator) (lexerError || std.mem.Allocator.Error || std.fmt.ParseIntError)!*ast.Value {
     // value0: less priority
     //      assignations '='
     // value0:
-    //  | value1 = value0
-    //  | value 1
-
+    //  | Value1 = value0
+    //  | value1
     const lhs = try lexeValue1(reader, allocator);
     if (reader.canPeek() and (try reader.peek()).type == TokenType.EQUAL) {
         _ = reader.consume(TokenType.EQUAL);

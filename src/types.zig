@@ -306,6 +306,12 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         },
         .assignement => |assign| {
             const rhsType = try getTypeOfValue(assign.rhs, ctx, allocator);
+            const ret_type = try CreateTypeVoid(allocator, switch (rhsType) {
+                .decided => |dec| dec.err,
+                .undecided => false,
+            });
+            if (!ret_type.matchType(expType))
+                errors.bbcErrorExit("The expected type '{s}' does not match the type got for an assignation: !Void", .{expType.toString(allocator)}, "");
             const lhsType =
                 switch (assign.lhs.*) {
                     .identifier => |ident| ctx.getVariable(ident),
@@ -368,7 +374,7 @@ pub fn inferTypeScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator, re
     _ = ctx;
     try inferTypeValue(items[items.len - 1], scope.ctx, allocator, rettype);
     var i: usize = items.len - 1;
-    while (i > 0) {
+    while (i > 1) {
         i -= 1;
         const value = items[i];
         try inferTypeValue(value, scope.ctx, allocator, voidType);

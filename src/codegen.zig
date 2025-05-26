@@ -171,7 +171,21 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
         // Both sides are Int, the result is Int too
         try freeLocation(rhs_loc, scopeCtx, ctx);
         const res_loc = lhs_loc; // the result is stored in the lhs location
-        try ctx.builder.plus(lhs_loc, rhs_loc);
+        switch (binop.operator) {
+            .Plus => try ctx.builder.plus(lhs_loc, rhs_loc),
+            .Minus => try ctx.builder.minus(lhs_loc, rhs_loc),
+            .Times => try ctx.builder.multiply(lhs_loc, rhs_loc),
+            .Div => try ctx.builder.divide(lhs_loc, rhs_loc),
+            .Modulus => try ctx.builder.modulo(lhs_loc, rhs_loc),
+            .Equal => try ctx.builder.equal(lhs_loc, rhs_loc),
+            .NotEqual => try ctx.builder.notEqual(lhs_loc, rhs_loc),
+            .Lt => try ctx.builder.lessThan(lhs_loc, rhs_loc),
+            .Le => try ctx.builder.lessEqual(lhs_loc, rhs_loc),
+            .Gt => try ctx.builder.greaterThan(lhs_loc, rhs_loc),
+            .Ge => try ctx.builder.greaterEqual(lhs_loc, rhs_loc),
+            else => unreachable,
+        }
+
         return res_loc;
     }
     errors.bbcErrorExit("Can't compile operator {s} with types {s} and {s}", .{

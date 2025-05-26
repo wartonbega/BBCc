@@ -5,6 +5,12 @@ pub const TokenType = enum {
     ANYTYPE, // Matches anything
     // Operators
     EQUAL,
+    DBL_EQUAL, // ==
+    NOT_EQUAL, // !=
+    LESS_THAN, // <
+    MORE_THAN, // >
+    LESS_THAN_EQ, // <=
+    MORE_THAN_EQ, // >=
     TIMES,
     PLUS,
     DIV,
@@ -90,6 +96,9 @@ fn isDirOperator(char: u8) bool {
         char == '/' or
         char == '*' or
         char == '=' or
+        char == '<' or
+        char == '>' or
+        char == '!' or
         char == '.';
 }
 
@@ -225,6 +234,18 @@ fn parseOperator(reader: *Reader, allocator: std.mem.Allocator) !Token {
     if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "->")) {
         _ = reader.consume(2);
         return .{ .type = TokenType.ARROW, .value = "->", .pos = try reader.getCurrentPosition(allocator) };
+    } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "==")) {
+        _ = reader.consume(2);
+        return .{ .type = TokenType.DBL_EQUAL, .value = "==", .pos = try reader.getCurrentPosition(allocator) };
+    } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "!=")) {
+        _ = reader.consume(2);
+        return .{ .type = TokenType.NOT_EQUAL, .value = "!=", .pos = try reader.getCurrentPosition(allocator) };
+    } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "<=")) {
+        _ = reader.consume(2);
+        return .{ .type = TokenType.LESS_THAN_EQ, .value = "<=", .pos = try reader.getCurrentPosition(allocator) };
+    } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), ">=")) {
+        _ = reader.consume(2);
+        return .{ .type = TokenType.MORE_THAN_EQ, .value = ">=", .pos = try reader.getCurrentPosition(allocator) };
     }
     // 1-char long operators :
     // + - / * . : ?
@@ -233,6 +254,7 @@ fn parseOperator(reader: *Reader, allocator: std.mem.Allocator) !Token {
     else {
         const char = reader.peek(1)[0];
         const ret = switch (char) {
+            '=' => Token{ .type = TokenType.EQUAL, .value = "=", .pos = try reader.getCurrentPosition(allocator) },
             '.' => Token{ .type = TokenType.DOT, .value = ".", .pos = try reader.getCurrentPosition(allocator) },
             ':' => Token{ .type = TokenType.COLON, .value = ":", .pos = try reader.getCurrentPosition(allocator) },
             '?' => Token{ .type = TokenType.QUEST, .value = "?", .pos = try reader.getCurrentPosition(allocator) },
@@ -240,6 +262,9 @@ fn parseOperator(reader: *Reader, allocator: std.mem.Allocator) !Token {
             '/' => Token{ .type = TokenType.DIV, .value = "/", .pos = try reader.getCurrentPosition(allocator) },
             '+' => Token{ .type = TokenType.PLUS, .value = "+", .pos = try reader.getCurrentPosition(allocator) },
             '-' => Token{ .type = TokenType.MINUS, .value = "-", .pos = try reader.getCurrentPosition(allocator) },
+            '>' => Token{ .type = TokenType.MORE_THAN, .value = ">", .pos = try reader.getCurrentPosition(allocator) },
+            '<' => Token{ .type = TokenType.LESS_THAN, .value = "<", .pos = try reader.getCurrentPosition(allocator) },
+            '!' => Token{ .type = TokenType.EXCLAM, .value = "!", .pos = try reader.getCurrentPosition(allocator) },
             else => parser_error.UnknownOperator,
         };
         _ = reader.consume(1);
@@ -268,8 +293,6 @@ pub fn parse(filename: []const u8, arena: *std.heap.ArenaAllocator) !std.ArrayLi
             try tokens.append(try parseIntegerLiteral(&reader, allocator));
         } else if (isAlpha(char)) {
             try tokens.append(try parseIdentifier(&reader, allocator));
-        } else if (char == '=') {
-            try tokens.append(.{ .type = TokenType.EQUAL, .value = reader.consume(1), .pos = try reader.getCurrentPosition(allocator) });
         } else if (isDirOperator(char)) {
             try tokens.append(try parseOperator(&reader, allocator));
         } else if (char == '\'') {

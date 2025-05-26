@@ -123,7 +123,169 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                     else => unreachable,
                 }
             },
-            else => unreachable,
+            .Minus => |minus| {
+                try writer.print("\tsub ", .{});
+                switch (minus.x) {
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    else => unreachable,
+                }
+                switch (minus.y) {
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    else => unreachable,
+                }
+            },
+            .Multiply => |mul| {
+                try writer.print("\timul ", .{});
+                switch (mul.x) {
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    else => unreachable,
+                }
+                switch (mul.y) {
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    else => unreachable,
+                }
+            },
+            .Divide => |div| {
+                // x86-64 division: dividend in rax, divisor as operand, result in rax, remainder in rdx
+                // Move dividend to rax
+                switch (div.x) {
+                    .register => |r| try writer.print("\tmov rax, {s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("\tmov rax, qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("\tmov rax, {s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tcqo\n", .{}); // sign-extend rax into rdx:rax
+                try writer.print("\tidiv ", .{});
+                switch (div.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                // Result is in rax
+            },
+            .Modulo => |mod| {
+                // x86-64 division: dividend in rax, divisor as operand, result in rax, remainder in rdx
+                switch (mod.x) {
+                    .register => |r| try writer.print("\tmov rax, {s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("\tmov rax, qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("\tmov rax, {s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tcqo\n", .{});
+                try writer.print("\tidiv ", .{});
+                switch (mod.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                // Remainder is in rdx
+            },
+            .Equal => |eq| {
+                try writer.print("\tcmp ", .{});
+                switch (eq.x) {
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    else => unreachable,
+                }
+                switch (eq.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tsete al\n\tmovzx rax, al\n", .{});
+            },
+            .NotEqual => |ne| {
+                try writer.print("\tcmp ", .{});
+                switch (ne.x) {
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    else => unreachable,
+                }
+                switch (ne.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tsetne al\n\tmovzx rax, al\n", .{});
+            },
+            .LessThan => |lt| {
+                try writer.print("\tcmp ", .{});
+                switch (lt.x) {
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    else => unreachable,
+                }
+                switch (lt.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tsetl al\n\tmovzx rax, al\n", .{});
+            },
+            .LessEqual => |le| {
+                try writer.print("\tcmp ", .{});
+                switch (le.x) {
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    else => unreachable,
+                }
+                switch (le.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tsetle al\n\tmovzx rax, al\n", .{});
+            },
+            .GreaterThan => |gt| {
+                try writer.print("\tcmp ", .{});
+                switch (gt.x) {
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    else => unreachable,
+                }
+                switch (gt.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tsetg al\n\tmovzx rax, al\n", .{});
+            },
+            .GreaterEqual => |ge| {
+                try writer.print("\tcmp ", .{});
+                switch (ge.x) {
+                    .register => |r| try writer.print("{s}, ", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}], ", .{d}),
+                    .label => |l| try writer.print("{s}, ", .{l}),
+                    else => unreachable,
+                }
+                switch (ge.y) {
+                    .register => |r| try writer.print("{s}\n", .{reg(r)}),
+                    .stack => |d| try writer.print("qword [rbp - {d}]\n", .{d}),
+                    .label => |l| try writer.print("{s}\n", .{l}),
+                    else => unreachable,
+                }
+                try writer.print("\tsetge al\n\tmovzx rax, al\n", .{});
+            },
         }
     }
 }

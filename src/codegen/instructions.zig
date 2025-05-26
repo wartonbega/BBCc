@@ -82,42 +82,42 @@ pub const Instructions = union(enum) {
         x: Location,
         y: Location,
     },
-    //Multiply: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //Divide: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //Modulo: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //Equal: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //NotEqual: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //LessThan: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //LessEqual: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //GreaterThan: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
-    //GreaterEqual: struct {
-    //    x: Location,
-    //    y: Location,
-    //},
+    Multiply: struct {
+        x: Location,
+        y: Location,
+    },
+    Divide: struct {
+        x: Location,
+        y: Location,
+    },
+    Modulo: struct {
+        x: Location,
+        y: Location,
+    },
+    Equal: struct {
+        x: Location,
+        y: Location,
+    },
+    NotEqual: struct {
+        x: Location,
+        y: Location,
+    },
+    LessThan: struct {
+        x: Location,
+        y: Location,
+    },
+    LessEqual: struct {
+        x: Location,
+        y: Location,
+    },
+    GreaterThan: struct {
+        x: Location,
+        y: Location,
+    },
+    GreaterEqual: struct {
+        x: Location,
+        y: Location,
+    },
     reserveStack: i64,
     Return: Location,
     Function: []const u8,
@@ -134,6 +134,15 @@ pub const Instructions = union(enum) {
         switch (self.*) {
             .Plus => |inst| std.debug.print("\tPlus({}, {})\n", .{ inst.x, inst.y }),
             .Minus => |inst| std.debug.print("\tMinus({}, {})\n", .{ inst.x, inst.y }),
+            .Multiply => |inst| std.debug.print("\tMultiply({}, {})\n", .{ inst.x, inst.y }),
+            .Divide => |inst| std.debug.print("\tDivide({}, {})\n", .{ inst.x, inst.y }),
+            .Modulo => |inst| std.debug.print("\tModulo({}, {})\n", .{ inst.x, inst.y }),
+            .Equal => |inst| std.debug.print("\tEqual({}, {})\n", .{ inst.x, inst.y }),
+            .NotEqual => |inst| std.debug.print("\tNotEqual({}, {})\n", .{ inst.x, inst.y }),
+            .LessThan => |inst| std.debug.print("\tLessThan({}, {})\n", .{ inst.x, inst.y }),
+            .LessEqual => |inst| std.debug.print("\tLessEqual({}, {})\n", .{ inst.x, inst.y }),
+            .GreaterThan => |inst| std.debug.print("\tGreaterThan({}, {})\n", .{ inst.x, inst.y }),
+            .GreaterEqual => |inst| std.debug.print("\tGreaterEqual({}, {})\n", .{ inst.x, inst.y }),
             .reserveStack => |inst| std.debug.print("\tReserveStack({d})\n", .{inst}),
             .Return => |inst| std.debug.print("\tReturn({})\n", .{inst}),
             .Function => |inst| std.debug.print("Function {s}\n", .{inst}),
@@ -204,6 +213,41 @@ pub const Builder = struct {
 
     pub fn minus(self: *Builder, x: Location, y: Location) !void {
         try self.code.append(Instructions{ .Minus = .{ .x = x, .y = y } });
+    }
+    pub fn multiply(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .Multiply = .{ .x = x, .y = y } });
+    }
+
+    pub fn divide(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .Divide = .{ .x = x, .y = y } });
+    }
+
+    pub fn modulo(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .Modulo = .{ .x = x, .y = y } });
+    }
+
+    pub fn equal(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .Equal = .{ .x = x, .y = y } });
+    }
+
+    pub fn notEqual(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .NotEqual = .{ .x = x, .y = y } });
+    }
+
+    pub fn lessThan(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .LessThan = .{ .x = x, .y = y } });
+    }
+
+    pub fn lessEqual(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .LessEqual = .{ .x = x, .y = y } });
+    }
+
+    pub fn greaterThan(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .GreaterThan = .{ .x = x, .y = y } });
+    }
+
+    pub fn greaterEqual(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .GreaterEqual = .{ .x = x, .y = y } });
     }
 
     pub fn funcall(self: *Builder, func: Location, args: Array(Location)) !void {
