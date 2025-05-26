@@ -75,13 +75,49 @@ pub const Type = union(enum) {
 
 pub const Instructions = union(enum) {
     Plus: struct {
-        x: Value,
-        y: Value,
+        x: Location,
+        y: Location,
     },
     Minus: struct {
-        x: Value,
-        y: Value,
+        x: Location,
+        y: Location,
     },
+    //Multiply: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //Divide: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //Modulo: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //Equal: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //NotEqual: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //LessThan: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //LessEqual: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //GreaterThan: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
+    //GreaterEqual: struct {
+    //    x: Location,
+    //    y: Location,
+    //},
     reserveStack: i64,
     Return: Location,
     Function: []const u8,
@@ -119,18 +155,59 @@ pub const Instructions = union(enum) {
 pub const Builder = struct {
     code: Prog,
     stack_state: HashMap,
+    allocator: Allocator,
 
     pub fn init(alloc: Allocator) Builder {
         const list = Prog.init(alloc);
         return .{
             .code = list,
             .stack_state = HashMap.init(alloc),
+            .allocator = alloc,
         };
     }
 
-    pub fn addInstruction(self: *Builder, inst: Instructions, alloc: Allocator) !void {
+    pub fn addInstruction(self: *Builder, inst: Instructions) !void {
         try self.code.append(inst);
-        _ = alloc;
+    }
+
+    pub fn reserveStack(self: *Builder, size: i32) !void {
+        try self.code.append(Instructions{ .reserveStack = size });
+    }
+
+    pub fn comment(self: *Builder, com: []const u8) !void {
+        try self.code.append(Instructions{ .Comment = com });
+    }
+
+    pub fn functionDec(self: *Builder, name: []const u8) !void {
+        try self.code.append(Instructions{ .Function = name });
+    }
+
+    pub fn returnInst(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .Return = loc });
+    }
+
+    pub fn moveInst(self: *Builder, from: Location, to: Location) !void {
+        try self.code.append(Instructions{ .Move = .{ .from = from, .to = to } });
+    }
+
+    pub fn intLit(self: *Builder, val: i64, to: Location) !void {
+        try self.code.append(Instructions{ .IntLit = .{ .val = val, .to = to } });
+    }
+
+    pub fn exitWith(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .ExitWith = loc });
+    }
+
+    pub fn plus(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .Plus = .{ .x = x, .y = y } });
+    }
+
+    pub fn minus(self: *Builder, x: Location, y: Location) !void {
+        try self.code.append(Instructions{ .Minus = .{ .x = x, .y = y } });
+    }
+
+    pub fn funcall(self: *Builder, func: Location, args: Array(Location)) !void {
+        try self.code.append(Instructions{ .Funcall = .{ .func = func, .args = args } });
     }
 };
 

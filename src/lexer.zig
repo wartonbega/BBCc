@@ -74,12 +74,8 @@ pub fn lexeType(reader: *tokenReader, allocator: Allocator) !*ast.Type {
     }
     const base_name = reader.consume(TokenType.IDENT).value;
 
-    // The base is an union(enum)
-    const base_ret = try allocator.create(ast.TypeBase);
-    base_ret.* = ast.TypeBase{ .name = base_name };
-
     const ret = try allocator.create(ast.Type);
-    ret.* = ast.Type{ .base = base_ret, .err = opt_error, .references = references_counter };
+    ret.* = ast.Type{ .base = ast.TypeBase{ .name = base_name }, .err = opt_error, .references = references_counter };
     return ret;
 }
 

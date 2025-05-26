@@ -31,7 +31,7 @@ pub const TypeBase = union(enum) {
 // The number of references (base = 0), is the number of time
 // there is a '*' before the type
 pub const Type = struct {
-    base: *TypeBase,
+    base: TypeBase,
     references: i32,
     err: bool,
 
@@ -42,7 +42,7 @@ pub const Type = struct {
         for (0..@intCast(self.references)) |_| {
             std.debug.print("*", .{});
         }
-        _ = switch (self.base.*) {
+        _ = switch (self.base) {
             .name => std.debug.print("{s}", .{self.base.name}),
             else => void,
         };
@@ -60,12 +60,16 @@ pub const Type = struct {
             buf[idx] = '*';
             idx += 1;
         }
-        _ = switch (self.base.*) {
+        _ = switch (self.base) {
             .name => |name| for (name) |c| {
                 buf[idx] = c;
                 idx += 1;
             },
             .function => |tfunc| {
+                for (tfunc.retype.toString(allocator)) |c| {
+                    buf[idx] = c;
+                    idx += 1;
+                }
                 buf[idx] = '(';
                 idx += 1;
                 for (tfunc.argtypes.items) |at| {
@@ -78,26 +82,20 @@ pub const Type = struct {
                 }
                 buf[idx] = ')';
                 idx += 1;
-                buf[idx] = '>';
-                idx += 1;
-                for (tfunc.retype.toString(allocator)) |c| {
-                    buf[idx] = c;
-                    idx += 1;
-                }
             },
         };
         return buf[0..idx];
     }
 
-    pub fn match(self: *Type, other: *Type) bool {
+    pub fn match(self: *const Type, other: *const Type) bool {
         if (self.references != other.references) return false;
         if (!other.err and self.err) return false;
-        return switch (self.base.*) {
-            .name => |name| switch (other.base.*) {
+        return switch (self.base) {
+            .name => |name| switch (other.base) {
                 .name => |name2| std.mem.eql(u8, name, name2),
                 .function => false,
             },
-            .function => switch (other.base.*) {
+            .function => switch (other.base) {
                 .name => false,
                 .function => false, // [TODO]
             },
@@ -120,6 +118,42 @@ pub const binOperator = enum {
     Or,
     And,
 };
+
+pub fn reprBinOp(op: binOperator) []const u8 {
+    return switch (op) {
+        .Plus => "+",
+        .Minus => "-",
+        .Times => "*",
+        .Div => "/",
+        .Modulus => "%",
+        .Lt => "<",
+        .Gt => ">",
+        .Le => "<=",
+        .Ge => ">=",
+        .Equal => "==",
+        .NotEqual => "!=",
+        .Or => "||",
+        .And => "&&",
+    };
+}
+
+pub fn binOpFuncName(op: binOperator) []const u8 {
+    return switch (op) {
+        .Plus => "Plus",
+        .Minus => "Minus",
+        .Times => "Times",
+        .Div => "Div",
+        .Modulus => "Mod",
+        .Lt => "LessThan",
+        .Gt => "GreaterThan",
+        .Le => "LessEqual",
+        .Ge => "GreaterEqual",
+        .Equal => "Equal",
+        .NotEqual => "NotEqual",
+        .Or => "Or",
+        .And => "And",
+    };
+}
 
 pub const binaryOperation = struct {
     rhs: *Value,

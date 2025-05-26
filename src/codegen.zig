@@ -30,7 +30,7 @@ const ScopeContext = struct {
 };
 
 pub fn getCompileType(t: *Ast.Type) Inst.Type {
-    switch (t.base.*) {
+    switch (t.base) {
         .function => return Inst.Type{ .declarefunc = {} },
         .name => |name| {
             if (std.mem.eql(u8, name, "Int"))
@@ -58,10 +58,10 @@ pub fn generateArguments(args: Arraylist(*Ast.Arguments), ctx: *Context, scopeCt
         size += getCompileSize(getCompileType(arg._type));
     }
 
-    try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = size }, ctx.allocator);
+    try ctx.builder.reserveStack(@intCast(size));
     size = @intCast(scopeCtx.stacktop);
     for (args.items, Inst.RegIter[0..args.items.len]) |arg, reg| {
-        try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .from = Inst.Location{ .register = reg }, .to = Inst.Location{ .stack = size } } }, ctx.allocator);
+        try ctx.builder.moveInst(Inst.Location{ .register = reg }, Inst.Location{ .stack = size });
         try scopeCtx.vars.put(arg.name, Inst.Location{ .stack = size });
         size += getCompileSize(getCompileType(arg._type));
     }
@@ -84,8 +84,9 @@ pub fn pickWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext, t: Inst.Type) 
     const loc = chooseWiselyLocation(ctx, scopeCtx);
     switch (loc) {
         .stack => {
+            // we add a pointer on the stack
             scopeCtx.stacktop += getCompileSize(t);
-            try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = getCompileSize(t) }, ctx.allocator);
+            try ctx.builder.reserveStack(@intCast(getCompileSize(t)));
         },
         .register => |reg| {
             ctx.registers.setRegister(reg, true);
@@ -96,13 +97,17 @@ pub fn pickWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext, t: Inst.Type) 
     return loc;
 }
 
+//pub fn storeValue(ctx: *Context, scopeCtx: *ScopeContext, t: Inst.Type) !Inst.Location {
+//    // Memory disposition (on the stack) :
+//    // (-)  stack end <-- | __SIZE__ | MEMORY ON STACK |  <-- stack begining  (+)
+//    // Returns a pointer to that
+//}
+
 pub fn freeLocation(loc: Inst.Location, scopeCtx: *ScopeContext, ctx: *Context) !void {
+    _ = scopeCtx;
     switch (loc) {
         .register => |reg| ctx.registers.setRegister(reg, false),
-        .stack => {
-            try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = -8 }, ctx.allocator);
-            scopeCtx.stacktop -= 8;
-        },
+        .stack => {},
         .label => unreachable,
         .void => {},
     }
@@ -114,13 +119,12 @@ pub fn saveRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
         size += @intFromBool(b);
     }
     size *= 8;
-    try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = size }, ctx.allocator);
+    try ctx.builder.reserveStack(@intCast(size));
 
     for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
         if (utilised) {
             scopeCtx.stacktop += 8;
-            //try ctx.builder.addInstruction(Inst.Instructions{ .Comment = "savereg" }, ctx.allocator);
-            try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .from = Inst.Location{ .register = reg }, .to = Inst.Location{ .stack = scopeCtx.stacktop } } }, ctx.allocator);
+            try ctx.builder.moveInst(Inst.Location{ .register = reg }, Inst.Location{ .register = reg });
         }
     }
 }
@@ -128,7 +132,7 @@ pub fn saveRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
 pub fn loadRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
     for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
         if (utilised) {
-            try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .to = Inst.Location{ .register = reg }, .from = Inst.Location{ .stack = scopeCtx.stacktop } } }, ctx.allocator);
+            try ctx.builder.moveInst(.{ .register = reg }, .{ .stack = scopeCtx.stacktop });
             scopeCtx.stacktop -= 8;
         }
     }
@@ -138,7 +142,7 @@ pub fn loadRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
         size += @intFromBool(b);
     }
     size *= 8;
-    try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = -size }, ctx.allocator);
+    try ctx.builder.reserveStack(@intCast(-size));
 }
 
 pub fn generateValueAssignement(value: *const Ast.Value, scopeCtx: *ScopeContext) Inst.Location {
@@ -149,11 +153,40 @@ pub fn generateValueAssignement(value: *const Ast.Value, scopeCtx: *ScopeContext
     };
 }
 
+pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeContext, ctx: *Context) !Inst.Location {
+    const lhs_loc = try generateValue(binop.lhs, scopeCtx, ctx);
+    const rhs_loc = try generateValue(binop.rhs, scopeCtx, ctx);
+    const lhs_type = (try bbcTypes.getTypeOfValue(binop.lhs, scopeCtx.context, ctx.allocator)).decided;
+    const rhs_type = (try bbcTypes.getTypeOfValue(binop.rhs, scopeCtx.context, ctx.allocator)).decided;
+    // Assuming lhs and rhs have decided types
+    switch (lhs_type.base) {
+        .function => errors.bbcErrorExit("Can't use operator on function (signature: {s})", .{lhs_type.toString(ctx.allocator)}, ""),
+        .name => {},
+    }
+    switch (rhs_type.base) {
+        .function => errors.bbcErrorExit("Can't use operator on function (signature: {s})", .{rhs_type.toString(ctx.allocator)}, ""),
+        .name => {},
+    }
+    if (std.mem.eql(u8, lhs_type.base.name, "Int") and std.mem.eql(u8, rhs_type.base.name, "Int")) {
+        // Both sides are Int, the result is Int too
+        try freeLocation(rhs_loc, scopeCtx, ctx);
+        const res_loc = lhs_loc; // the result is stored in the lhs location
+        try ctx.builder.plus(lhs_loc, rhs_loc);
+        return res_loc;
+    }
+    errors.bbcErrorExit("Can't compile operator {s} with types {s} and {s}", .{
+        Ast.reprBinOp(binop.operator),
+        lhs_type.toString(ctx.allocator),
+        rhs_type.toString(ctx.allocator),
+    }, "");
+    return chooseWiselyLocation(ctx, scopeCtx);
+}
+
 pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Context) Allocator.Error!Inst.Location {
     switch (value.*) {
         .intLit => |intlit| {
             const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = {} });
-            try ctx.builder.addInstruction(Inst.Instructions{ .IntLit = .{ .to = dest, .val = @intCast(intlit) } }, ctx.allocator);
+            try ctx.builder.intLit(@intCast(intlit), dest);
             return dest;
         },
         .identifier => |ident| {
@@ -162,14 +195,14 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             const origin = scopeCtx.vars.get(ident).?;
             const compile_type = getCompileType(scopeCtx.context.getVariable(ident).decided);
             const dest = try pickWiselyLocation(ctx, scopeCtx, compile_type);
-            try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .from = origin, .to = dest } }, ctx.allocator);
+            try ctx.builder.moveInst(origin, dest);
             return dest;
         },
         .assignement => |assign| {
             // "dest = origin"
             const dest = generateValueAssignement(assign.lhs, scopeCtx);
             const origin = try generateValue(assign.rhs, scopeCtx, ctx);
-            try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .from = origin, .to = dest } }, ctx.allocator);
+            try ctx.builder.moveInst(origin, dest);
             try freeLocation(origin, scopeCtx, ctx);
             return Inst.Location{ .void = {} };
         },
@@ -183,8 +216,8 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             const func = try generateValue(funcall.func, scopeCtx, ctx);
             scopeCtx.stacktop += 8;
             const func_stack_lock = Inst.Location{ .stack = scopeCtx.stacktop };
-            try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = @intCast(8) }, ctx.allocator);
-            try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .from = func, .to = func_stack_lock } }, ctx.allocator);
+            try ctx.builder.reserveStack(@intCast(8));
+            try ctx.builder.moveInst(func, func_stack_lock);
             try freeLocation(func, scopeCtx, ctx);
 
             var args = Arraylist(Inst.Location).init(ctx.allocator);
@@ -192,8 +225,8 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 scopeCtx.stacktop += 8;
                 const base_arg = try generateValue(arg, scopeCtx, ctx);
                 const stack_lock = Inst.Location{ .stack = scopeCtx.stacktop };
-                try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = @intCast(8) }, ctx.allocator);
-                try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .from = base_arg, .to = stack_lock } }, ctx.allocator);
+                try ctx.builder.reserveStack(@intCast(8));
+                try ctx.builder.moveInst(base_arg, stack_lock);
                 try freeLocation(base_arg, scopeCtx, ctx);
                 try args.append(stack_lock);
             }
@@ -201,10 +234,10 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             //try saveRegistersFuncall(ctx, scopeCtx);
 
             const funcretype = (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided.base.function.retype;
-            try ctx.builder.addInstruction(Inst.Instructions{ .Funcall = .{ .args = args, .func = func_stack_lock } }, ctx.allocator);
+            try ctx.builder.funcall(func_stack_lock, args);
 
             const retloc = try pickWiselyLocation(ctx, scopeCtx, getCompileType(funcretype));
-            try ctx.builder.addInstruction(Inst.Instructions{ .Move = .{ .from = Inst.Location{ .register = Inst.Registers.r0 }, .to = retloc } }, ctx.allocator);
+            try ctx.builder.moveInst(.{ .register = Inst.Registers.r0 }, retloc);
 
             //try loadRegistersFuncall(ctx, scopeCtx);
 
@@ -213,6 +246,9 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             }
             try freeLocation(func_stack_lock, scopeCtx, ctx);
             return retloc;
+        },
+        .binaryOperator => |binop| {
+            return try generateBinOperation(binop, scopeCtx, ctx);
         },
         else => {
             std.debug.print("Unimplemented: {}\n", .{value.*});
@@ -231,7 +267,7 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
         allocsize += getCompileSize(vartype);
     }
     // allocating the variables declared in the scope
-    try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = allocsize }, ctx.allocator);
+    try ctx.builder.reserveStack(@intCast(allocsize));
     scopeCtx.stacktop += allocsize;
 
     var newScopeCtx = try ctx.allocator.create(ScopeContext);
@@ -244,18 +280,18 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
         _ = try generateValue(value, newScopeCtx, ctx);
     }
 
-    try ctx.builder.addInstruction(Inst.Instructions{ .Comment = "Return value of scope" }, ctx.allocator);
+    try ctx.builder.comment("Return value of scope");
     const ret = try generateValue(scope.code.items[scope.code.items.len - 1], newScopeCtx, ctx);
 
     // deallocating the variables
-    try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = -allocsize }, ctx.allocator);
+    try ctx.builder.reserveStack(@intCast(-allocsize));
     scopeCtx.stacktop -= allocsize;
     return ret;
 }
 
 pub fn generateFunction(func: *const Ast.funcDef, ctx: *Context, baseVarTable: VarPos) !void {
     // declare function (add label)
-    try ctx.builder.addInstruction(Inst.Instructions{ .Function = func.name }, ctx.allocator);
+    try ctx.builder.functionDec(func.name);
 
     // creating the context for the scope
     var scopeCtx = try ctx.allocator.create(ScopeContext);
@@ -270,14 +306,14 @@ pub fn generateFunction(func: *const Ast.funcDef, ctx: *Context, baseVarTable: V
 
     // Clearing the stack of arguments, no need to do it if it is already empy
     if (scopeCtx.stacktop != 0)
-        try ctx.builder.addInstruction(Inst.Instructions{ .reserveStack = -scopeCtx.stacktop }, ctx.allocator);
+        try ctx.builder.reserveStack(@intCast(-scopeCtx.stacktop));
 
     // if function is main, then exit with the return value
     if (std.mem.eql(u8, func.name, "main"))
-        try ctx.builder.addInstruction(Inst.Instructions{ .ExitWith = return_val }, ctx.allocator);
+        try ctx.builder.exitWith(return_val);
 
     if (!func.return_type.match((try bbcTypes.CreateTypeVoid(ctx.allocator, false)).decided))
-        try ctx.builder.addInstruction(Inst.Instructions{ .Return = return_val }, ctx.allocator);
+        try ctx.builder.returnInst(return_val);
 
     try freeLocation(return_val, scopeCtx, ctx);
 }

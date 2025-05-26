@@ -1,9 +1,7 @@
-func toto (Int x, Int y, Int z) Int {
-    z
-}
 
 func main () Int {    
     let b
-    b = toto(42, 69, 80)
+    let a = 69
+    b = a + a
     b
 }
