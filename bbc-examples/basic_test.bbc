@@ -1,6 +1,7 @@
 
 func main () Int { 
-    let a = 70   
-    let b = a == 70
-    a - 1
+    let a = "Hello World"
+    let b = 1 + 2
+    let c = b + 66
+    c
 }

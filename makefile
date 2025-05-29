@@ -3,7 +3,7 @@
 	compile_compiler
 
 run_arm: a.out
-	arch -x86_64 ./a.out || (echo "output: $$?"; exit 0)
+	arch -x86_64 ./a.out || (echo "\noutput: $$?"; exit 0)
 
 a.out: output.o
 	clang output.o -o a.out -e main -m64 -arch x86_64

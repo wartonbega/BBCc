@@ -7,15 +7,18 @@ const HashMap = std.StringArrayHashMap(Value);
 const Allocator = std.mem.Allocator;
 
 pub const Location = union(enum) {
-    stack: i64,
+    stack: struct {
+        idx: usize,
+        stack_state: Array(Type),
+    }, // The index on the stack, as well as the stack's state
     register: Registers,
     label: []const u8,
     void: void,
 };
+// r15 is reserved for the dumpers for swapping values
+pub const Registers = enum { r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14 };
 
-pub const Registers = enum { r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15 };
-
-pub const RegIter = [_]Registers{ .r0, .r1, .r2, .r3, .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r11, .r12, .r13, .r14, .r15 };
+pub const RegIter = [_]Registers{ .r0, .r1, .r2, .r3, .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r11, .r12, .r13, .r14 };
 
 fn registerIndex(reg: Registers) usize {
     return switch (reg) {
@@ -34,15 +37,14 @@ fn registerIndex(reg: Registers) usize {
         .r12 => @intCast(12),
         .r13 => @intCast(13),
         .r14 => @intCast(14),
-        .r15 => @intCast(15),
     };
 }
 
 pub const RegisterTable = struct {
-    utilised: [16]bool,
+    utilised: [15]bool,
 
     pub fn init() RegisterTable {
-        return RegisterTable{ .utilised = [_]bool{false} ** 16 };
+        return RegisterTable{ .utilised = [_]bool{false} ** 15 };
     }
 
     pub fn getRegister(self: *RegisterTable, reg: Registers) bool {
@@ -65,18 +67,36 @@ pub const Type = union(enum) {
     voidType: void,
     intType: void,
     stringType: void,
+    arrayLike: void,
     charType: void,
-    pointer: *Type,
-    declarefunc: void,
+    pointer: void,
+    function: void,
     structType: struct {
         habitants: []const Type,
     },
 };
 
+pub fn getCompileSize(t: Type) i64 {
+    // Returns the size in bytes of the Compile Type
+    return switch (t) {
+        .intType => 8,
+        .pointer => 8,
+        .function => 8,
+        .stringType => 8,
+        .arrayLike => 8,
+        .charType => 1,
+        else => unreachable,
+    };
+}
+
 pub const Instructions = union(enum) {
     Plus: struct {
         x: Location,
         y: Location,
+    },
+    addImmediate: struct {
+        x: Location,
+        y: i64,
     },
     Minus: struct {
         x: Location,
@@ -118,12 +138,23 @@ pub const Instructions = union(enum) {
         x: Location,
         y: Location,
     },
+    writeArrayElement: struct { // To write at a specific index of an array (fat-pointed)
+        arr: Location,
+        idx: usize,
+        value: Location,
+        _type: Type,
+    },
     reserveStack: i64,
+    decreaseStack: Type,
+    getBasePointer: Location,
+    getStackPointer: Location,
     Return: Location,
     Function: []const u8,
     Move: struct { from: Location, to: Location },
     IntLit: struct { val: i64, to: Location },
+    CharLit: struct { val: u8, to: Location },
     ExitWith: Location,
+    Print: Location,
     Comment: []const u8,
     Funcall: struct {
         func: Location,
@@ -149,6 +180,7 @@ pub const Instructions = union(enum) {
             .Move => |inst| std.debug.print("\tMove {} to {}\n", .{ inst.from, inst.to }),
             .IntLit => |inst| std.debug.print("\tIntlit {d} in {}\n", .{ inst.val, inst.to }),
             .ExitWith => |inst| std.debug.print("\tExit({})\n", .{inst}),
+            .Print => |inst| std.debug.print("\tPrint({})\n", .{inst}),
             .Comment => |comment| std.debug.print("\t// {s}\n", .{comment}),
             .Funcall => |func| {
                 std.debug.print("\tCall {}(", .{func.func});
@@ -157,6 +189,12 @@ pub const Instructions = union(enum) {
                 }
                 std.debug.print(")\n", .{});
             },
+            .addImmediate => |inst| std.debug.print("\tAddImmediate({}, {d})\n", .{ inst.x, inst.y }),
+            .getBasePointer => |inst| std.debug.print("\tGetBasePointer({})\n", .{inst}),
+            .getStackPointer => |inst| std.debug.print("\tGetStackPointer({})\n", .{inst}),
+            .CharLit => |inst| std.debug.print("\tCharlit {d} in {}\n", .{ inst.val, inst.to }),
+            .writeArrayElement => |inst| std.debug.print("\tWriteArrayElement(arr: {}, idx: {d}, value: {}, type: {})\n", .{ inst.arr, inst.idx, inst.value, inst._type }),
+            .decreaseStack => |inst| std.debug.print("\tDecreaseStack({})\n", .{inst}),
         }
     }
 };
@@ -183,6 +221,22 @@ pub const Builder = struct {
         try self.code.append(Instructions{ .reserveStack = size });
     }
 
+    pub fn decreaseStack(self: *Builder, _type: Type) !void {
+        try self.code.append(Instructions{ .decreaseStack = _type });
+    }
+
+    pub fn writeArrayElement(self: *Builder, arr: Location, idx: usize, value: Location, _type: Type) !void {
+        try self.code.append(Instructions{ .writeArrayElement = .{ .arr = arr, .idx = idx, .value = value, ._type = _type } });
+    }
+
+    pub fn getBasePointer(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .getBasePointer = loc });
+    }
+
+    pub fn getStackPointer(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .getStackPointer = loc });
+    }
+
     pub fn comment(self: *Builder, com: []const u8) !void {
         try self.code.append(Instructions{ .Comment = com });
     }
@@ -203,12 +257,24 @@ pub const Builder = struct {
         try self.code.append(Instructions{ .IntLit = .{ .val = val, .to = to } });
     }
 
+    pub fn charLit(self: *Builder, val: u8, to: Location) !void {
+        try self.code.append(Instructions{ .CharLit = .{ .val = val, .to = to } });
+    }
+
     pub fn exitWith(self: *Builder, loc: Location) !void {
         try self.code.append(Instructions{ .ExitWith = loc });
     }
 
+    pub fn print(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .Print = loc });
+    }
+
     pub fn plus(self: *Builder, x: Location, y: Location) !void {
         try self.code.append(Instructions{ .Plus = .{ .x = x, .y = y } });
+    }
+
+    pub fn addImmediate(self: *Builder, x: Location, y: i64) !void {
+        try self.code.append(Instructions{ .addImmediate = .{ .x = x, .y = y } });
     }
 
     pub fn minus(self: *Builder, x: Location, y: Location) !void {

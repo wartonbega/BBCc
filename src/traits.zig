@@ -57,6 +57,21 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
             },
         });
     }
+
+    for ([_]ast.binOperator{ .Plus, .Minus, .Times }) |op| {
+        try int_implems.append(.{
+            .name = ast.binOpFuncName(op),
+            .signature = ast.TypeFunc{
+                .argtypes = blk: {
+                    var args = ArrayList(*ast.Type).init(allocator);
+                    try args.append(bool_type.decided);
+                    break :blk args;
+                },
+                .retype = int_type.decided,
+            },
+        });
+    }
+
     for ([_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt }) |op| {
         try int_implems.append(.{
             .name = ast.binOpFuncName(op),

@@ -173,30 +173,31 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                     if (func.signature.argtypes.items.len != 1)
                         errors.bbcErrorExit("The function {s} does not have enough arguments", .{func.name}, "");
                     const arg_type = func.signature.argtypes.items[0];
-                    if (!rhsType.match(arg_type))
-                        errors.bbcErrorExit("The types of the argument and the value does not match", .{}, "");
-                    found = true;
+                    if (rhsType.match(arg_type))
+                        //errors.bbcErrorExit("The types of the argument and the value does not match, expected '{s}' got '{s}'", .{ arg_type.toString(allocator), rhsType.toString(allocator) }, "");
+                        found = true;
                 },
                 .undecided => |rhs_traits| {
+                    var found_matching_funcs = ArrayList(analyser.funcPair).init(allocator);
+                    defer found_matching_funcs.deinit();
                     for (funcs.items) |func| {
                         if (!std.mem.eql(u8, func.name, ast.binOpFuncName(op)))
                             continue;
                         if (func.signature.argtypes.items.len != 1)
                             errors.bbcErrorExit("The function {s} does not have enough arguments", .{func.name}, "");
                         const arg_type = func.signature.argtypes.items[0];
-                        var all_traits_match = true;
-                        for (rhs_traits.items) |required_trait| {
-                            if (!traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, Type{ .decided = arg_type }, required_trait)) {
-                                all_traits_match = false;
-                                break;
-                            }
-                        }
-                        if (all_traits_match) {
-                            found = true;
-                            try inferTypeValue(rhsValue, ctx, allocator, Type{ .decided = arg_type });
-                            break;
-                        }
+                        if (traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, Type{ .decided = arg_type }, rhs_traits))
+                            try found_matching_funcs.append(func);
                     }
+                    if (found_matching_funcs.items.len == 0)
+                        errors.bbcErrorExit("Found no suitable implementation of '{s}' for type '{s}'", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
+                    if (found_matching_funcs.items.len > 1)
+                        errors.bbcErrorExit("Found more than 1 suitable implementation of '{s}' for type '{s}'. Can't decide...", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
+                    const matched_func = found_matching_funcs.items[0];
+                    if (matched_func.signature.argtypes.items.len != 1)
+                        errors.bbcErrorExit("The function {s} does not have enough arguments", .{matched_func.name}, "");
+                    const arg_type = matched_func.signature.argtypes.items[0];
+                    try inferTypeValue(rhsValue, ctx, allocator, Type{ .decided = arg_type });
                 },
             }
             if (!found)
@@ -212,8 +213,9 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                 const candidate_type = kv.key_ptr.*;
                 const tttype = try allocator.create(ast.Type);
                 tttype.* = ast.Type{ .base = .{ .name = candidate_type }, .err = false, .references = @intCast(0) };
-
                 var implements_all = true;
+                defer if (!implements_all) allocator.destroy(tttype);
+
                 for (traits_list.items) |required_trait| {
                     if (!traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, Type{ .decided = tttype }, required_trait)) {
                         implements_all = false;

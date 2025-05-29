@@ -112,7 +112,16 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                 },
                 .undecided => |traits| {
                     // We can extand the list of traits for this type
-                    try ctx.extendTraits(ident, traits);
+                    const var_type = ctx.getVariable(ident);
+                    switch (var_type) {
+                        .decided => |t| {
+                            if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, var_type, traits))
+                                errors.bbcErrorExit("The type '{s}' does not match all the traits required to be assigned to", .{t.toString(allocator)}, "");
+                        },
+                        .undecided => |new_traits| {
+                            try ctx.extendTraits(ident, new_traits);
+                        },
+                    }
                 },
             }
         },
@@ -166,14 +175,14 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
                 const arg_type = func.signature.argtypes.items[0];
                 switch (rhsType) {
                     .decided => {
-                        if (!rhsType.match(arg_type))
-                            errors.bbcErrorExit("The argument of type {s} does not match the value of type {s}", .{ arg_type.toString(allocator), lhsType.toString(allocator) }, "");
-                        return Types.Type{ .decided = func.signature.retype };
+                        if (rhsType.match(arg_type))
+                            //errors.bbcErrorExit("The argument of type {s} does not match the value of type {s}", .{ arg_type.toString(allocator), lhsType.toString(allocator) }, "");
+                            return Types.Type{ .decided = func.signature.retype };
                     },
                     .undecided => |traits| {
-                        if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, Types.Type{ .decided = arg_type }, traits))
-                            errors.bbcErrorExit("The type {s} does not match all the following traits:\n{}", .{ arg_type.toString(allocator), traits }, "");
-                        return Types.Type{ .decided = func.signature.retype };
+                        if (Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, Types.Type{ .decided = arg_type }, traits))
+                            //errors.bbcErrorExit("The type {s} does not match all the following traits:\n{}", .{ arg_type.toString(allocator), traits }, "");
+                            return Types.Type{ .decided = func.signature.retype };
                     },
                 }
             }
