@@ -21,6 +21,9 @@ pub const Errors = enum {
 pub const TypeFunc = struct {
     argtypes: ArrayList(*Type),
     retype: *Type,
+    typeparam: ArrayList(TypeParam),
+    fname: []const u8,
+    //uid: []const u8, // A unique Id/name for compilation purpose
 };
 
 pub const TypeBase = union(enum) {
@@ -278,11 +281,17 @@ pub const Arguments = struct {
     }
 };
 
+pub const TypeParam = struct {
+    name: []const u8,
+    traits: ArrayList([]const u8),
+};
+
 pub const funcDef = struct {
     name: []const u8,
     arguments: ArrayList(*Arguments),
     return_type: *Type,
     code: *Scope,
+    typeparam: ArrayList(TypeParam),
     pub fn print(self: *funcDef) void {
         std.debug.print("function '{s}' (", .{self.name});
         for (self.arguments.items) |arg| {

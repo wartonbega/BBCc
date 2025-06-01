@@ -66,6 +66,7 @@ pub const Value = struct {
 pub const Type = union(enum) {
     voidType: void,
     intType: void,
+    boolType: void,
     stringType: void,
     arrayLike: void,
     charType: void,
@@ -161,7 +162,8 @@ pub const Instructions = union(enum) {
         args: Array(Location),
     },
 
-    pub fn print(self: *const Instructions) void {
+    pub fn print(self: *const Instructions, idx: usize) void {
+        std.debug.print("#{d}", .{idx});
         switch (self.*) {
             .Plus => |inst| std.debug.print("\tPlus({}, {})\n", .{ inst.x, inst.y }),
             .Minus => |inst| std.debug.print("\tMinus({}, {})\n", .{ inst.x, inst.y }),

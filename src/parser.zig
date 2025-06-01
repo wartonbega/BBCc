@@ -34,7 +34,7 @@ pub const TokenType = enum {
     CHARLIT,
     STRINGLIT,
 
-    COLON,
+    COLON, // :
 
     // Parenthesis-like
     O_PAR,
@@ -151,7 +151,7 @@ const Reader = struct {
             }
         }
         var buf = try allocator.alloc(u8, 100);
-        const ret = try std.fmt.bufPrint(buf, "{s}:{d}:{d}", .{ self.filename, line, col });
+        const ret = try std.fmt.bufPrint(buf, "{s}:{d}:{d}", .{ self.filename, line + 1, col });
         return buf[0..ret.len];
     }
 

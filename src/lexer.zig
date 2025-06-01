@@ -430,11 +430,54 @@ pub fn lexeArguments(reader: *tokenReader, allocator: Allocator) !ArrayList(*ast
     return args;
 }
 
+pub fn lexeTypeParametrisation(reader: *tokenReader, allocator: Allocator) !ArrayList(ast.TypeParam) {
+    // <Name: trait>
+    var ret = ArrayList(ast.TypeParam).init(allocator);
+    if (!reader.canPeek() or (try reader.peek()).type != .LESS_THAN)
+        return ret;
+
+    _ = reader.consume(.LESS_THAN);
+    while (true) {
+        const name = reader.consume(.IDENT);
+        _ = reader.consume(.COLON);
+        // The traits list
+        var traits = ArrayList([]const u8).init(allocator);
+        // Two ways for reading traits (with or without Parenthesis):
+        // <Type1: (Add, Sub, ...), Type2: ..;> or <Type1: Add, Type2: ...>
+        if (reader.canPeek() and (try reader.peek()).type == .O_PAR) {
+            _ = reader.consume(.O_PAR);
+            const first_trait = reader.consume(.IDENT);
+            try traits.append(first_trait.value);
+            while (reader.canPeek() and (try reader.peek()).type == .COMMA) {
+                _ = reader.consume(.COMMA);
+                const trait = reader.consume(.IDENT);
+                try traits.append(trait.value);
+            }
+            _ = reader.consume(.C_PAR);
+        } else {
+            const trait = reader.consume(.IDENT);
+            try traits.append(trait.value);
+        }
+        try ret.append(.{
+            .name = name.value,
+            .traits = traits,
+        });
+        if (reader.canPeek() and (try reader.peek()).type != .COMMA) {
+            break;
+        } else _ = reader.consume(.COMMA);
+    }
+    _ = reader.consume(.MORE_THAN);
+    return ret;
+}
+
 pub fn lexeFuncdef(reader: *tokenReader, allocator: Allocator) !*ast.funcDef {
     // Rule:
-    //      func name ( args* ) retype { code }
+    //      func <typeimple>? name ( args* ) retype { code }
     //          with { code } witch is parsed by scope
-    _ = try reader.next();
+    _ = reader.consume(.FN_DEC); // func keyword
+
+    const type_param = try lexeTypeParametrisation(reader, allocator);
+
     const name = reader.consume(TokenType.IDENT);
 
     const args = try lexeArguments(reader, allocator);
@@ -447,7 +490,13 @@ pub fn lexeFuncdef(reader: *tokenReader, allocator: Allocator) !*ast.funcDef {
 
     const ret = try allocator.create(ast.funcDef);
 
-    ret.* = ast.funcDef{ .arguments = args, .name = name.value, .return_type = rettype, .code = scope };
+    ret.* = ast.funcDef{
+        .arguments = args,
+        .name = name.value,
+        .return_type = rettype,
+        .code = scope,
+        .typeparam = type_param,
+    };
     return ret;
 }
 

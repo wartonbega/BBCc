@@ -30,7 +30,7 @@ fn isAlloced(t: Inst.Type) bool {
     // Returns wether the type is alloced in memory, or can just be used in registers
     return switch (t) {
         .arrayLike, .structType => true,
-        .charType, .intType, .pointer, .function, .voidType, .stringType => false,
+        .charType, .intType, .boolType, .pointer, .function, .voidType, .stringType => false,
     };
 }
 
@@ -39,9 +39,7 @@ fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
         .stack => |d| {
             var size_accumulator: i64 = @intCast(0);
             try writer.print("\txor r15, r15\n", .{});
-            try writer.print("\t;; {d}\n", .{d.stack_state.items.len});
             for (d.idx..d.stack_state.items.len) |i| {
-                try writer.print("\t;; {d} {d}\n", .{ i, d.stack_state.items.len - 1 - i });
                 const ttype = d.stack_state.items[d.stack_state.items.len - 1 - i];
                 if (isAlloced(ttype)) {
                     if (size_accumulator != 0)
@@ -101,7 +99,6 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                     try writer.print("\tlea {s}, {s}\n", .{ reg(inst.to.register), inst.from.label });
                 } else {
                     const pop_ra = try prepareForLoc(writer, inst.to);
-                    try writer.print("\t;; got {}\n", .{inst.to});
                     const pop_rb = try prepareForLoc(writer, inst.from);
                     // Assuming inst.to and inst.from are not both on the stack
                     if (inst.to == .stack and inst.from == .stack) {
@@ -145,13 +142,12 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
             },
             .decreaseStack => |t| {
                 // Removes what is on top of the stack (trusting that it is the wright type)
-                std.debug.print("->{}\n", .{t});
                 if (isAlloced(t)) { // reading the size of the fat pointer
                     try writer.print("\tmov r15, qword [rsp]\n", .{});
+                    try writer.print("\tadd rsp, r15\n", .{});
                 } else { // else removing 8 (min size on the stack) on 64 bits cpus
-                    try writer.print("\tmov r15, 8\n", .{});
+                    try writer.print("\tadd rsp, 8\n", .{});
                 }
-                try writer.print("\tadd rsp, r15\n", .{});
             },
             .ExitWith => |inst| {
                 if (try prepareForLoc(writer, inst))

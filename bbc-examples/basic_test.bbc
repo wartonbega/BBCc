@@ -1,7 +1,11 @@
 
-func main () Int { 
-    let a = "Hello World"
-    let b = 1 + 2
-    let c = b + 66
-    c
+func <Type: Add, RetType: Add> toto (Type x, RetType y) RetType {
+    let q = x + x
+    y
+}
+
+func main () Int {
+    let c = toto(1, 1 == 1)
+    let d = toto(1, 1)
+    42
 }

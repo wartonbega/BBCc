@@ -43,6 +43,7 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
 
     try ctx.trait_map.put("Int", int_traits);
 
+    // Implementing int + int -> int
     var int_implems = ArrayList(analyser.funcPair).init(allocator);
     for ([_]ast.binOperator{ .Plus, .Minus, .Times, .Div, .Modulus }) |op| {
         try int_implems.append(.{
@@ -54,10 +55,13 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
                     break :blk args;
                 },
                 .retype = int_type.decided,
+                .typeparam = ArrayList(ast.TypeParam).init(allocator),
+                .fname = stringFromTrait(traitFromOperator(op)),
             },
         });
     }
 
+    // int + bool -> int
     for ([_]ast.binOperator{ .Plus, .Minus, .Times }) |op| {
         try int_implems.append(.{
             .name = ast.binOpFuncName(op),
@@ -68,10 +72,13 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
                     break :blk args;
                 },
                 .retype = int_type.decided,
+                .typeparam = ArrayList(ast.TypeParam).init(allocator),
+                .fname = stringFromTrait(traitFromOperator(op)),
             },
         });
     }
 
+    // int == int -> bool
     for ([_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt }) |op| {
         try int_implems.append(.{
             .name = ast.binOpFuncName(op),
@@ -82,6 +89,8 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
                     break :blk args;
                 },
                 .retype = bool_type.decided,
+                .typeparam = ArrayList(ast.TypeParam).init(allocator),
+                .fname = stringFromTrait(traitFromOperator(op)),
             },
         });
     }
@@ -157,4 +166,166 @@ pub fn traitFromOperator(op: ast.binOperator) Trait {
         .Gt => return Trait.Gr,
         else => unreachable,
     }
+}
+
+pub fn traitFromString(t: []const u8) Trait {
+    if (std.mem.eql(u8, t, "Add")) return Trait.Add;
+    if (std.mem.eql(u8, t, "Sub")) return Trait.Sub;
+    if (std.mem.eql(u8, t, "Mult")) return Trait.Mult;
+    if (std.mem.eql(u8, t, "Div")) return Trait.Div;
+    if (std.mem.eql(u8, t, "Mod")) return Trait.Mod;
+    if (std.mem.eql(u8, t, "Eq")) return Trait.Eq;
+    if (std.mem.eql(u8, t, "GrEq")) return Trait.GrEq;
+    if (std.mem.eql(u8, t, "LeEq")) return Trait.LeEq;
+    if (std.mem.eql(u8, t, "Le")) return Trait.Le;
+    if (std.mem.eql(u8, t, "Gr")) return Trait.Gr;
+    if (std.mem.eql(u8, t, "Display")) return Trait.Display;
+    std.debug.panic("Unknown trait string: {s}", .{t});
+}
+
+pub fn stringFromTrait(t: Trait) []const u8 {
+    switch (t) {
+        .Add => return "Add",
+        .Sub => return "Sub",
+        .Mult => return "Mult",
+        .Div => return "Div",
+        .Mod => return "Mod",
+        .Eq => return "Eq",
+        .GrEq => return "GrEq",
+        .LeEq => return "LeEq",
+        .Le => return "Le",
+        .Gr => return "Gr",
+        .Display => return "Display",
+    }
+}
+
+pub fn traitsFromStrings(t: ArrayList([]const u8), allocator: std.mem.Allocator) ArrayList(Trait) {
+    var traits = ArrayList(Trait).init(allocator);
+    for (t.items) |trait_str| {
+        traits.append(traitFromString(trait_str)) catch {};
+    }
+    return traits;
+}
+
+pub fn defaultReturnType(t: Trait, param: Types.Type, alloc: std.mem.Allocator) !Types.Type {
+    // Return the default return type of a trait, used on type 'param'
+    // for example (here, '.' representes any type), with type T, (T + .) should return T,
+    // but (T == .) should return Bool
+    switch (t) {
+        .Add, .Sub, .Mult, .Div, .Mod => return param,
+        .Eq, .Gr, .GrEq, .Le, .LeEq => return try Types.CreateTypeBool(alloc, false),
+        .Display => return try Types.CreateTypeString(alloc, false),
+    }
+}
+
+pub fn traitListToString(traits: ArrayList(Trait), allocator: std.mem.Allocator) ![]const u8 {
+    // Considering traits won't have a name greater than 10
+    var buffer = try allocator.alloc(u8, traits.items.len * 10);
+    var i: usize = @intCast(0);
+    for (traits.items) |t| {
+        for (stringFromTrait(t)) |c| {
+            buffer[i] = c;
+            i += 1;
+        }
+        buffer[i] = ',';
+        buffer[i + 1] = ' ';
+        i += 2;
+    }
+    return buffer[0..i];
+}
+
+pub fn traitUnion(map1: *std.hash_map.StringHashMap(ArrayList(Trait)), map2: *const std.hash_map.StringHashMap(ArrayList(Trait))) !void {
+    const allocator = map1.allocator;
+    var it = map2.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const traits = entry.value_ptr.*;
+
+        if (map1.getPtr(key)) |list| {
+            try list.appendSlice(traits.items);
+        } else {
+            var new_list = ArrayList(Trait).init(allocator);
+            try new_list.appendSlice(traits.items);
+            try map1.put(key, new_list);
+        }
+    }
+}
+
+fn getTypeLeafes(value: *ast.Value, ctx: *analyser.Context, allocator: std.mem.Allocator) !Types.Type {
+    return switch (value.*) {
+        .intLit => try Types.CreateTypeInt(allocator, false),
+        .stringLit => try Types.CreateTypeString(allocator, false),
+        .charLit => try Types.CreateTypeChar(allocator, false),
+        .varDec => Types.Type{ .undecided = ArrayList(Trait).init(allocator) },
+        .assignement => try Types.CreateTypeVoid(allocator, false), // [TODO]: change wether it is !Void, if the right hand side can return an error
+        .parenthesis => try getTypeLeafes(value.parenthesis, ctx, allocator),
+        .identifier => |ident| blk: {
+            if (ctx.variableExist(ident))
+                break :blk ctx.getVariable(ident);
+            break :blk Types.Type{ .undecided = ArrayList(Trait).init(allocator) };
+        },
+        .scope => |scope| try getTypeLeafes(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator),
+        .funcall => |func| blk: {
+            const ret = try analyser.analyseFuncall(func, ctx, allocator);
+            break :blk ret;
+        },
+        .binaryOperator => Types.Type{ .undecided = ArrayList(Trait).init(allocator) },
+        else => {
+            std.debug.print("Unimplemented {}", .{value.*});
+            unreachable;
+        },
+    };
+}
+
+pub fn getTypeTraits(instruction: *ast.Value, ctx: *analyser.Context, allocator: std.mem.Allocator) !std.hash_map.StringHashMap(ArrayList(Trait)) {
+    // Return all the traits associated with each types in the scope
+    var ret = std.hash_map.StringHashMap(ArrayList(Trait)).init(allocator);
+    switch (instruction.*) {
+        .charLit => {},
+        .intLit => {},
+        .stringLit => {},
+        .identifier => {},
+        .varDec => {},
+        .assignement => |inst| {
+            try traitUnion(&ret, &try getTypeTraits(inst.lhs, ctx, allocator));
+            try traitUnion(&ret, &try getTypeTraits(inst.rhs, ctx, allocator));
+        },
+        .funcall => |inst| {
+            try traitUnion(&ret, &try getTypeTraits(inst.func, ctx, allocator));
+            for (inst.args.items) |arg| {
+                try traitUnion(&ret, &try getTypeTraits(arg, ctx, allocator));
+            }
+        },
+        .parenthesis => |inst| {
+            try traitUnion(&ret, &try getTypeTraits(inst, ctx, allocator));
+        },
+        .scope => |inst| {
+            for (inst.code.items) |val| {
+                try traitUnion(&ret, &try getTypeTraits(val, ctx, allocator));
+            }
+        },
+        .binaryOperator => |binop| {
+            try traitUnion(&ret, &try getTypeTraits(binop.lhs, ctx, allocator));
+            try traitUnion(&ret, &try getTypeTraits(binop.rhs, ctx, allocator));
+            const lhs_type = try analyser.analyseValue(binop.lhs, ctx, allocator);
+            switch (lhs_type) {
+                .decided => |_type| {
+                    switch (_type.base) {
+                        .function => errors.bbcErrorExit("'function' like type (here {s}) don't support operations", .{_type.toString(allocator)}, ""),
+                        .name => |n| {
+                            if (!ret.contains(n))
+                                try ret.put(n, ArrayList(Trait).init(allocator));
+                            try ret.getPtr(n).?.append(traitFromOperator(binop.operator));
+                        },
+                    }
+                },
+                .undecided => {},
+            }
+        },
+        else => {
+            std.debug.print("Unimplemented {}", .{instruction});
+            unreachable;
+        },
+    }
+    return ret;
 }

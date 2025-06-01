@@ -17,8 +17,18 @@ pub const funcPair = struct {
     name: []const u8,
     signature: ast.TypeFunc,
 };
-
 const ImplemHashmap = std.hash_map.StringHashMap(ArrayList(funcPair));
+
+pub const functionVersion = struct {
+    name: []const u8,
+    signature: ast.TypeFunc,
+    version: std.hash_map.StringHashMap(Types.Type),
+};
+
+pub const function = struct {
+    name: []const u8,
+    def: ast.funcDef,
+};
 
 pub const Context = struct {
     variables: VarHashmap,
@@ -26,6 +36,8 @@ pub const Context = struct {
     typealiases: TypeTraitHashmap, // For declaring <T: Add, Eq, ...> => (a: T, b: Int)
     type_implem: ImplemHashmap,
     parent: ?*Context,
+    functions_to_compile: ArrayList(functionVersion),
+    functions: std.hash_map.StringHashMap(*ast.funcDef),
 
     pub fn init(allocator: Allocator) !*Context {
         const self = try allocator.create(Context);
@@ -33,7 +45,17 @@ pub const Context = struct {
         const types = TraitHashmap.init(allocator);
         const typealiases = TypeTraitHashmap.init(allocator);
         const type_implem = ImplemHashmap.init(allocator);
-        self.* = .{ .variables = vars, .parent = null, .trait_map = types, .typealiases = typealiases, .type_implem = type_implem };
+        const function_to_compile = ArrayList(functionVersion).init(allocator);
+        const functions = std.hash_map.StringHashMap(*ast.funcDef).init(allocator);
+        self.* = .{
+            .variables = vars,
+            .parent = null,
+            .trait_map = types,
+            .typealiases = typealiases,
+            .type_implem = type_implem,
+            .functions_to_compile = function_to_compile,
+            .functions = functions,
+        };
         return self;
     }
 
@@ -47,8 +69,40 @@ pub const Context = struct {
         const types = try self.trait_map.clone();
         const type_implem = try self.type_implem.clone();
         const typealiases = try self.typealiases.clone();
-        new.* = .{ .variables = vars, .parent = self, .trait_map = types, .typealiases = typealiases, .type_implem = type_implem };
+        new.* = .{
+            .variables = vars,
+            .parent = self,
+            .trait_map = types,
+            .typealiases = typealiases,
+            .type_implem = type_implem,
+            .functions_to_compile = ArrayList(functionVersion).init(allocator),
+            .functions = std.hash_map.StringHashMap(*ast.funcDef).init(allocator),
+        };
         return new;
+    }
+
+    pub fn functionExist(self: *Context, name: []const u8) bool {
+        if (self.parent) |parent| // The root of the context tree
+            return parent.functionExist(name);
+        return self.functions.contains(name);
+    }
+
+    pub fn getFunction(self: *Context, name: []const u8) *ast.funcDef {
+        if (self.parent) |parent| // The root of the context tree
+            return parent.getFunction(name);
+        return self.functions.get(name).?;
+    }
+
+    pub fn setFunction(self: *Context, name: []const u8, func: *ast.funcDef) !void {
+        if (self.parent) |parent| { // The root of the context tree
+            try parent.setFunction(name, func);
+        } else try self.functions.put(name, func);
+    }
+
+    pub fn addFunctionToCompile(self: *Context, func: functionVersion) !void {
+        if (self.parent) |parent| { // The root of the context tree
+            try parent.addFunctionToCompile(func);
+        } else try self.functions_to_compile.append(func);
     }
 
     pub fn createVariable(self: *Context, name: []const u8, t: Types.Type) !void {
@@ -71,7 +125,6 @@ pub const Context = struct {
         } else if (self.parent) |parent| {
             return parent.getVariable(name);
         }
-        std.debug.print("{s}\n", .{name});
         return self.variables.get(name).?;
     }
 
@@ -129,6 +182,13 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
     }
 }
 
+pub fn typeparamContains(typeparam: ArrayList(ast.TypeParam), name: []const u8) bool {
+    for (typeparam.items) |tp|
+        if (std.mem.eql(u8, name, tp.name))
+            return true;
+    return false;
+}
+
 pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !Types.Type {
     const f_signature = try analyseValue(func.func, ctx, allocator);
     // returns the return type of the function
@@ -140,13 +200,38 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
                 .function => |functype| {
                     if (func.args.items.len != functype.argtypes.items.len)
                         errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ func.args.items.len, functype.argtypes.items.len }, "");
+                    // We can build the current function version, which shall have to be compiled later
+                    var func_version = std.hash_map.StringHashMap(Types.Type).init(allocator);
                     for (func.args.items, functype.argtypes.items) |a, b| {
                         const argtype = try analyseValue(a, ctx, allocator);
                         switch (argtype) {
-                            .undecided => return argtype,
-                            .decided => if (!argtype.decided.match(b))
-                                errors.bbcErrorExit("Arguments type {s} doesn't match the function's ({s})", .{ argtype.toString(allocator), b.toString(allocator) }, ""),
+                            .undecided => return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) },
+                            .decided => {
+                                // If there's a type alias, then we get to assign it
+                                if (b.*.base == .name and typeparamContains(t.base.function.typeparam, b.base.name)) {
+                                    if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
+                                        errors.bbcErrorExit("'{s}'' is already set to be type '{s}'", .{
+                                            b.*.base.name,
+                                            func_version.get(b.*.base.name).?.toString(allocator),
+                                        }, "");
+                                    }
+                                    try func_version.put(b.*.base.name, argtype);
+                                } else if (!argtype.decided.match(b)) {
+                                    errors.bbcErrorExit("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, "");
+                                }
+                            },
                         }
+                    }
+                    try ctx.addFunctionToCompile(functionVersion{
+                        .name = f_signature.decided.base.function.fname,
+                        .signature = f_signature.decided.base.function,
+                        .version = func_version,
+                    });
+                    const ret_type = t.base.function.retype.base;
+                    if (ret_type == .name and typeparamContains(t.base.function.typeparam, ret_type.name)) {
+                        if (!func_version.contains(ret_type.name))
+                            errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, "");
+                        return func_version.get(ret_type.name).?;
                     }
                     return Types.Type{ .decided = t.base.function.retype };
                 },
@@ -160,13 +245,14 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
     // It's a bit like calling a the function "lhsName.opName(rhsType) => ?"
     const op_trait = Traits.traitFromOperator(op);
     if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, lhsType, op_trait)) {
-        for (ctx.trait_map.get("Int").?.items) |trait| {
-            std.debug.print("{s}", .{@tagName(trait)});
-        }
-        errors.bbcErrorExit("Can't use operator '{s}' on type '{s}', because it does implements the right trait", .{ ast.reprBinOp(op), rhsType.toString(allocator) }, "");
+        errors.bbcErrorExit("Can't use operator '{s}' on type '{s}', because it does implements the right trait", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
     }
     switch (lhsType) {
         .decided => |t| {
+            if (!ctx.type_implem.contains(t.base.name)) {
+                // If there's a type as a parameter, it shall be the return type (otherwise, error :) )
+                return try Traits.defaultReturnType(Traits.traitFromOperator(op), lhsType, allocator);
+            }
             for (ctx.type_implem.get(t.base.name).?.items) |func| {
                 if (!std.mem.eql(u8, func.name, ast.binOpFuncName(op)))
                     continue;
@@ -231,8 +317,10 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         .parenthesis => |val| return try analyseValue(val, ctx, allocator),
         .scope => |scope| return try analyseScope(scope, ctx, allocator),
         .identifier => |ident| {
+            if (ctx.functionExist(ident))
+                return Types.Type{ .decided = try createFunctionSignature(ctx.getFunction(ident), allocator) };
             if (!ctx.variableExist(ident))
-                errors.bbcErrorExit("Variable {s} is not declared", .{ident}, "");
+                errors.bbcErrorExit("Variable {s} is not declared (analysis)", .{ident}, "");
 
             return ctx.getVariable(ident);
         },
@@ -257,22 +345,43 @@ pub fn analyseScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) std.
     return try analyseValue(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator);
 }
 
-pub fn analyseFunction(func: *ast.funcDef, ctx: *Context, allocator: Allocator) !void {
-    // Defining the function's signature type
+pub fn createFunctionSignature(func: *ast.funcDef, allocator: Allocator) !*ast.Type {
     const functype = try allocator.create(ast.Type);
     var argtypes = ArrayList(*ast.Type).init(allocator);
     for (func.arguments.items) |arg|
         try argtypes.append(arg._type);
-    functype.* = .{ .base = .{ .function = ast.TypeFunc{ .argtypes = argtypes, .retype = func.return_type } }, .err = false, .references = @intCast(0) };
+    functype.* = .{
+        .base = .{ .function = ast.TypeFunc{
+            .argtypes = argtypes,
+            .retype = func.return_type,
+            .typeparam = func.typeparam,
+            .fname = func.name,
+        } },
+        .err = false,
+        .references = @intCast(0),
+    };
+    return functype;
+}
+
+pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocator) !void {
+    // Defining the function's signature type
+    const functype = try createFunctionSignature(func, allocator);
 
     // Associating the name with the type
-    try ctx.setVariable(func.name, Types.Type{ .decided = functype });
+    try par_ctx.setVariable(func.name, Types.Type{ .decided = functype });
+
+    var ctx = try par_ctx.createChild(allocator);
 
     // associating variables
     for (func.arguments.items) |arg| {
         try ctx.setVariable(arg.name, Types.Type{ .decided = arg._type });
     }
 
+    for (func.typeparam.items) |type_param| {
+        try ctx.typealiases.put(type_param.name, Traits.traitsFromStrings(type_param.traits, allocator));
+    }
+
+    std.debug.print("\n#[Analysing {s}]\n", .{func.name});
     _ = try analyseScope(func.code, ctx, allocator);
     try Types.inferTypeScope(func.code, ctx, allocator, Types.Type.init(func.return_type));
     var it = func.code.ctx.variables.iterator();
@@ -281,15 +390,94 @@ pub fn analyseFunction(func: *ast.funcDef, ctx: *Context, allocator: Allocator) 
     }
 }
 
+pub fn verifyFunctionTypeTraits(func: *ast.funcDef, ctx: *Context, allocator: Allocator, f_version: functionVersion) !void {
+    // Verifys that all the types in the current function's version are implementing the right traits
+    // There's an error if one of the types don't respect the traits in play
+    var val = ast.Value{ .scope = func.code };
+    const t = try Traits.getTypeTraits(&val, ctx, allocator);
+    var it_k = t.iterator();
+    while (it_k.next()) |e| {
+        const arg_type_name = e.key_ptr.*;
+        const arg_type_traits = e.value_ptr.*; // ArrayList(Trait)
+
+        if (!f_version.version.contains(arg_type_name))
+            errors.bbcErrorExit("The type '{s}' is nowhere found in the function's version", .{arg_type_name}, "");
+
+        const aliased = f_version.version.get(arg_type_name).?;
+        if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, aliased, arg_type_traits))
+            errors.bbcErrorExit("The type '{s}' should implement [{s}], but doesn't", .{
+                aliased.toString(allocator),
+                try Traits.traitListToString(arg_type_traits, allocator),
+            }, "");
+    }
+}
+
+fn containFunction(func: functionVersion, list: ArrayList(functionVersion)) bool {
+    // Returns if list contains func, by checking the names and the version (considering two
+    // different functions won't have the same name)
+    if (list.items.len > 0) {
+        for (list.items) |compiled_func| {
+            if (std.mem.eql(u8, compiled_func.name, func.name) and func.version.count() == compiled_func.version.count()) {
+                var all_match = true;
+                var it = func.version.iterator();
+                while (it.next()) |kv| {
+                    const key = kv.key_ptr.*;
+                    if (!compiled_func.version.contains(key)) {
+                        all_match = false;
+                        break;
+                    }
+                    const v1 = kv.value_ptr.*;
+                    const v2 = compiled_func.version.get(key).?;
+                    if (!v1.matchType(v2)) {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if (all_match) return true;
+            }
+        }
+    }
+    return false;
+}
+
 pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     try Traits.initBasicTraits(ctx, allocator);
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
-            .FuncDef => try analyseFunction(inst.FuncDef, ctx, allocator),
+            .FuncDef => try ctx.setFunction(inst.FuncDef.name, inst.FuncDef),
         }
     }
+
+    var funcs_to_compile = ArrayList(functionVersion).init(allocator);
+
+    // we can analyse the main function
+    try analyseFunction(ctx.getFunction("main"), ctx, allocator);
+    while (ctx.functions_to_compile.items.len != 0) {
+        const func = ctx.functions_to_compile.pop().?;
+
+        // fetching the function definition
+        const func_def = ctx.getFunction(func.name);
+
+        try analyseFunction(func_def, ctx, allocator);
+
+        // We can verify that the current version of the function's types matches all the required traits
+        try verifyFunctionTypeTraits(func_def, func_def.code.ctx, allocator, func);
+        if (containFunction(func, funcs_to_compile))
+            continue;
+        try funcs_to_compile.append(func);
+    }
+    // Transpilation
+    ctx.functions_to_compile = funcs_to_compile;
+    const main_func = ctx.getFunction("main");
+    try ctx.functions_to_compile.append(functionVersion{
+        .signature = (try createFunctionSignature(main_func, allocator)).base.function,
+        .name = "main",
+        .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
+    });
+
     if (!ctx.variableExist("main"))
         errors.bbcErrorExit("Missing function 'main'", .{}, "");
+
     switch (ctx.getVariable("main").decided.base) {
         .function => |f| {
             if (!f.retype.match((try Types.CreateTypeInt(allocator, true)).decided))
