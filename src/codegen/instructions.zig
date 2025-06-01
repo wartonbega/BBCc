@@ -90,6 +90,14 @@ pub fn getCompileSize(t: Type) i64 {
     };
 }
 
+pub fn isAlloced(t: Type) bool {
+    // Returns wether the type is alloced in memory, or can just be used in registers
+    return switch (t) {
+        .arrayLike, .structType => true,
+        .charType, .intType, .boolType, .pointer, .function, .voidType, .stringType => false,
+    };
+}
+
 pub const Instructions = union(enum) {
     Plus: struct {
         x: Location,
@@ -151,7 +159,19 @@ pub const Instructions = union(enum) {
     getStackPointer: Location,
     Return: Location,
     Function: []const u8,
-    Move: struct { from: Location, to: Location },
+    Move: struct {
+        from: Location,
+        to: Location,
+        _type: Type,
+    },
+    loadAddress: struct {
+        from: Location,
+        to: Location,
+    },
+    CopyOnStack: struct { // Automatically grows the stack
+        from: Location,
+        _type: Type,
+    },
     IntLit: struct { val: i64, to: Location },
     CharLit: struct { val: u8, to: Location },
     ExitWith: Location,
@@ -179,7 +199,9 @@ pub const Instructions = union(enum) {
             .reserveStack => |inst| std.debug.print("\tReserveStack({d})\n", .{inst}),
             .Return => |inst| std.debug.print("\tReturn({})\n", .{inst}),
             .Function => |inst| std.debug.print("Function {s}\n", .{inst}),
-            .Move => |inst| std.debug.print("\tMove {} to {}\n", .{ inst.from, inst.to }),
+            .Move => |inst| std.debug.print("\tMove {} to {} (type {})\n", .{ inst.from, inst.to, inst._type }),
+            .loadAddress => |inst| std.debug.print("\tLoad address {} to {}\n", .{ inst.from, inst.to }),
+            .CopyOnStack => |inst| std.debug.print("\tCopy {} on stack (type {})\n", .{ inst.from, inst._type }),
             .IntLit => |inst| std.debug.print("\tIntlit {d} in {}\n", .{ inst.val, inst.to }),
             .ExitWith => |inst| std.debug.print("\tExit({})\n", .{inst}),
             .Print => |inst| std.debug.print("\tPrint({})\n", .{inst}),
@@ -251,8 +273,12 @@ pub const Builder = struct {
         try self.code.append(Instructions{ .Return = loc });
     }
 
-    pub fn moveInst(self: *Builder, from: Location, to: Location) !void {
-        try self.code.append(Instructions{ .Move = .{ .from = from, .to = to } });
+    pub fn moveInst(self: *Builder, from: Location, to: Location, _type: Type) !void {
+        try self.code.append(Instructions{ .Move = .{ .from = from, .to = to, ._type = _type } });
+    }
+
+    pub fn loadAddress(self: *Builder, from: Location, to: Location) !void {
+        try self.code.append(Instructions{ .loadAddress = .{ .from = from, .to = to } });
     }
 
     pub fn intLit(self: *Builder, val: i64, to: Location) !void {

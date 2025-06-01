@@ -26,13 +26,7 @@ pub fn reg(r: Inst.Registers) []const u8 {
     };
 }
 
-fn isAlloced(t: Inst.Type) bool {
-    // Returns wether the type is alloced in memory, or can just be used in registers
-    return switch (t) {
-        .arrayLike, .structType => true,
-        .charType, .intType, .boolType, .pointer, .function, .voidType, .stringType => false,
-    };
-}
+const isAlloced = Inst.isAlloced;
 
 fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
     switch (loc) {
@@ -83,7 +77,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
     const writer = file.writer();
 
     //_ = try writer.write("%macro LOAD_ADDRESS 2\n\tadrp %1, %2@PAGE\n\tadd  %1, %1, %2@PAGEOFF\n%endmacro\n");
-    _ = try writer.write("default rel\nsection .text align=16\n\tglobal main\n");
+    _ = try writer.write("default rel\nsection .text align=8\n\tglobal main\n");
     for (builder.code.items) |instruction| {
         switch (instruction) {
             //.Plus => |inst| writer.writeAll("\tPlus({}, {})\n"),
@@ -102,7 +96,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                     const pop_rb = try prepareForLoc(writer, inst.from);
                     // Assuming inst.to and inst.from are not both on the stack
                     if (inst.to == .stack and inst.from == .stack) {
-                        return error.UnsupportedBothStackValues; // TODO : implemente the error
+                        return error.UnsupportedBothStackValues;
                     }
                     if (pop_ra or pop_rb)
                         try writer.print("\tpop r15\n", .{});
@@ -111,6 +105,14 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                         dumpLocation(inst.from),
                     });
                 }
+            },
+            .loadAddress => |inst| {
+                const pop_ra = try prepareForLoc(writer, inst.to);
+                const pop_rb = try prepareForLoc(writer, inst.from);
+                if (pop_ra or pop_rb)
+                    try writer.print("\tpop r15\n", .{});
+
+                try writer.print("\tlea {s}, [{s}]\n", .{ dumpLocation(inst.to), dumpLocation(inst.from) });
             },
             .IntLit => |inst| {
                 if (try prepareForLoc(writer, inst.to))
@@ -189,11 +191,13 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                 try writer.print("\tpop rsi\n", .{});
             },
             .Return => |ret| {
-                if (try prepareForLoc(writer, ret))
-                    try writer.print("\tpop r15\n", .{});
-                try writer.print("\tmov rax, {s}\n", .{
-                    dumpLocation(ret),
-                });
+                if (ret != .void) {
+                    if (try prepareForLoc(writer, ret))
+                        try writer.print("\tpop r15\n", .{});
+                    try writer.print("\tmov rax, {s}\n", .{
+                        dumpLocation(ret),
+                    });
+                }
                 try writer.print("\tret\n", .{});
             },
             .Comment => {},
@@ -371,6 +375,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                 try writer.print("\tsetge al\n", .{});
                 try writer.print("\tmovzx {s}, al\n", .{dumpLocation(ge.x)});
             },
+            else => unreachable,
         }
     }
 }

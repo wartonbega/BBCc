@@ -439,29 +439,37 @@ pub fn lexeTypeParametrisation(reader: *tokenReader, allocator: Allocator) !Arra
     _ = reader.consume(.LESS_THAN);
     while (true) {
         const name = reader.consume(.IDENT);
-        _ = reader.consume(.COLON);
-        // The traits list
-        var traits = ArrayList([]const u8).init(allocator);
-        // Two ways for reading traits (with or without Parenthesis):
-        // <Type1: (Add, Sub, ...), Type2: ..;> or <Type1: Add, Type2: ...>
-        if (reader.canPeek() and (try reader.peek()).type == .O_PAR) {
-            _ = reader.consume(.O_PAR);
-            const first_trait = reader.consume(.IDENT);
-            try traits.append(first_trait.value);
-            while (reader.canPeek() and (try reader.peek()).type == .COMMA) {
-                _ = reader.consume(.COMMA);
+        if (reader.canPeek() and (try reader.peek()).type == .COLON) {
+            _ = reader.consume(.COLON);
+            // The traits list
+            var traits = ArrayList([]const u8).init(allocator);
+            // Two ways for reading traits (with or without Parenthesis):
+            // <Type1: (Add, Sub, ...), Type2: ..;> or <Type1: Add, Type2: ...>
+            if (reader.canPeek() and (try reader.peek()).type == .O_PAR) {
+                _ = reader.consume(.O_PAR);
+                const first_trait = reader.consume(.IDENT);
+                try traits.append(first_trait.value);
+                while (reader.canPeek() and (try reader.peek()).type == .COMMA) {
+                    _ = reader.consume(.COMMA);
+                    const trait = reader.consume(.IDENT);
+                    try traits.append(trait.value);
+                }
+                _ = reader.consume(.C_PAR);
+            } else {
                 const trait = reader.consume(.IDENT);
                 try traits.append(trait.value);
             }
-            _ = reader.consume(.C_PAR);
+            try ret.append(.{
+                .name = name.value,
+                .traits = traits,
+            });
         } else {
-            const trait = reader.consume(.IDENT);
-            try traits.append(trait.value);
+            // No traits specified
+            try ret.append(.{
+                .name = name.value,
+                .traits = ArrayList([]const u8).init(allocator),
+            });
         }
-        try ret.append(.{
-            .name = name.value,
-            .traits = traits,
-        });
         if (reader.canPeek() and (try reader.peek()).type != .COMMA) {
             break;
         } else _ = reader.consume(.COMMA);

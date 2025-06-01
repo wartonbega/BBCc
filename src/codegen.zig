@@ -23,21 +23,16 @@ const Context = struct {
 
     pub fn getUid(self: *Context, version: analyser.functionVersion) []const u8 {
         base_for: for (self.func_uid_list.items) |func| {
-            std.debug.print("0\n", .{});
             if (std.mem.eql(u8, func.version.name, version.name)) {
-                std.debug.print("1\n", .{});
                 if (func.version.version.count() != version.version.count())
                     continue;
-                std.debug.print("2\n", .{});
                 var it = func.version.version.iterator();
-                std.debug.print("3\n", .{});
                 while (it.next()) |vers| {
                     if (!version.version.contains(vers.key_ptr.*))
                         continue :base_for;
                     if (!version.version.get(vers.key_ptr.*).?.matchType(vers.value_ptr.*))
                         continue :base_for;
                 }
-                std.debug.print("4\n", .{});
                 return func.uid;
             }
         }
@@ -114,13 +109,17 @@ pub fn generateArguments(args: Arraylist(*Ast.Arguments), ctx: *Context, scopeCt
 
     try ctx.builder.reserveStack(@intCast(size));
     for (args.items, Inst.RegIter[0..args.items.len]) |arg, reg| {
-        try scopeCtx.simstack.append(getCompileType(arg._type, scopeCtx.version));
+        const compile_arg_type = getCompileType(arg._type, scopeCtx.version);
+        try scopeCtx.simstack.append(compile_arg_type);
         try ctx.builder.moveInst(
             Inst.Location{ .register = reg },
-            Inst.Location{ .stack = .{
-                .idx = scopeCtx.getCurrentStackIndex(),
-                .stack_state = scopeCtx.getCurrentStackState(),
-            } },
+            Inst.Location{
+                .stack = .{
+                    .idx = scopeCtx.getCurrentStackIndex(),
+                    .stack_state = scopeCtx.getCurrentStackState(),
+                },
+            },
+            compile_arg_type,
         );
         try scopeCtx.vars.put(arg.name, Inst.Location{ .stack = .{
             .idx = scopeCtx.getCurrentStackIndex(),
@@ -184,7 +183,12 @@ pub fn saveRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
     for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
         if (utilised) {
             try scopeCtx.simstack.append(Inst.Type{ .intType = {} });
-            try ctx.builder.moveInst(Inst.Location{ .register = reg }, Inst.Location{ .stack = reg });
+            try ctx.builder.moveInst(
+                Inst.Location{ .register = reg },
+                Inst.Location{ .stack = reg },
+                Inst.Type{ .intType = {} }, // As we this is just a workarround to manipulate registers,
+                // we can just say it is int
+            );
         }
     }
 }
@@ -192,12 +196,17 @@ pub fn saveRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
 pub fn loadRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
     for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
         if (utilised) {
-            try ctx.builder.moveInst(.{ .register = reg }, .{
-                .stack = .{
-                    .idx = scopeCtx.getCurrentStackIndex(),
-                    .stack_state = scopeCtx.getCurrentStackState(),
+            try ctx.builder.moveInst(
+                .{ .register = reg },
+                .{
+                    .stack = .{
+                        .idx = scopeCtx.getCurrentStackIndex(),
+                        .stack_state = scopeCtx.getCurrentStackState(),
+                    },
                 },
-            });
+                Inst.Type{ .intType = {} }, // As we this is just a workarround to manipulate registers,
+                // we can just say it is int
+            );
             scopeCtx.simstack.pop();
         }
     }
@@ -267,14 +276,20 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 return origin;
             const compile_type = getCompileType(_type, scopeCtx.version);
             const dest = try pickWiselyLocation(ctx, scopeCtx, compile_type);
-            try ctx.builder.moveInst(origin, dest);
+
+            try ctx.builder.moveInst(origin, dest, compile_type);
+
             return dest;
         },
         .assignement => |assign| {
             // "dest = origin"
             const origin = try generateValue(assign.rhs, scopeCtx, ctx);
             const dest = generateValueAssignement(assign.lhs, scopeCtx);
-            try ctx.builder.moveInst(origin, dest);
+            const compile_type = getCompileType(
+                (try bbcTypes.getTypeOfValue(assign.rhs, scopeCtx.context, ctx.allocator)).decided,
+                scopeCtx.version,
+            );
+            try ctx.builder.moveInst(origin, dest, compile_type);
             try freeLocation(origin, scopeCtx, ctx);
             return Inst.Location{ .void = {} };
         },
@@ -304,7 +319,28 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided,
                 scopeCtx.version,
             ));
-            try ctx.builder.moveInst(old_func_loc, func);
+            try ctx.builder.moveInst(old_func_loc, func, Inst.Type{ .function = {} });
+
+            var args = Arraylist(Inst.Location).init(ctx.allocator);
+            for (funcall.args.items) |arg| {
+                const base_arg = try generateValue(arg, scopeCtx, ctx);
+                const arg_compile_type = getCompileType(
+                    (try bbcTypes.getTypeOfValue(arg, scopeCtx.context, ctx.allocator)).decided,
+                    scopeCtx.version,
+                );
+                try scopeCtx.simstack.append(arg_compile_type);
+                const stack_lock = Inst.Location{
+                    .stack = .{
+                        .idx = scopeCtx.getCurrentStackIndex(),
+                        .stack_state = scopeCtx.getCurrentStackState(),
+                    },
+                };
+                try ctx.builder.reserveStack(@intCast(8));
+                try ctx.builder.moveInst(base_arg, stack_lock, arg_compile_type);
+                try freeLocation(base_arg, scopeCtx, ctx);
+                try args.append(stack_lock);
+            }
+            //try saveRegistersFuncall(ctx, scopeCtx);
 
             try scopeCtx.simstack.append(Inst.Type{ .function = {} });
             const func_stack_loc_idx = scopeCtx.getCurrentStackIndex();
@@ -315,28 +351,8 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 },
             };
             try ctx.builder.reserveStack(@intCast(8));
-            try ctx.builder.moveInst(func, func_stack_lock);
+            try ctx.builder.moveInst(func, func_stack_lock, Inst.Type{ .function = {} }); // We can reserve the function on the stack
             try freeLocation(func, scopeCtx, ctx);
-
-            var args = Arraylist(Inst.Location).init(ctx.allocator);
-            for (funcall.args.items) |arg| {
-                const base_arg = try generateValue(arg, scopeCtx, ctx);
-                try scopeCtx.simstack.append(getCompileType(
-                    (try bbcTypes.getTypeOfValue(arg, scopeCtx.context, ctx.allocator)).decided,
-                    scopeCtx.version,
-                ));
-                const stack_lock = Inst.Location{
-                    .stack = .{
-                        .idx = scopeCtx.getCurrentStackIndex(),
-                        .stack_state = scopeCtx.getCurrentStackState(),
-                    },
-                };
-                try ctx.builder.reserveStack(@intCast(8));
-                try ctx.builder.moveInst(base_arg, stack_lock);
-                try freeLocation(base_arg, scopeCtx, ctx);
-                try args.append(stack_lock);
-            }
-            //try saveRegistersFuncall(ctx, scopeCtx);
 
             const funcretype = (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided.base.function.retype;
             func_stack_lock = Inst.Location{
@@ -347,11 +363,12 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             };
             try ctx.builder.funcall(func_stack_lock, args);
 
-            const retloc = try pickWiselyLocation(ctx, scopeCtx, getCompileType(
+            const ret_compile_type = getCompileType(
                 funcretype,
                 scopeCtx.version,
-            ));
-            try ctx.builder.moveInst(.{ .register = Inst.Registers.r0 }, retloc);
+            );
+            const retloc = try pickWiselyLocation(ctx, scopeCtx, ret_compile_type);
+            try ctx.builder.moveInst(.{ .register = Inst.Registers.r0 }, retloc, ret_compile_type);
 
             //try loadRegistersFuncall(ctx, scopeCtx);
 
@@ -404,6 +421,8 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
 }
 
 pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Context) !Inst.Location {
+    if (scope.code.items.len == 0)
+        return pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .voidType = {} });
     // declaring all the variables inside the scope
     var newScopeCtx = try ctx.allocator.create(ScopeContext);
     newScopeCtx.vars = try VarPos.clone(scopeCtx.vars);
@@ -478,8 +497,8 @@ pub fn generateFunction(func: *const analyser.functionVersion, ctx: *Context, ba
     if (std.mem.eql(u8, function_uid, "main"))
         try ctx.builder.exitWith(return_val);
 
-    if (!funcdef.return_type.match((try bbcTypes.CreateTypeVoid(ctx.allocator, false)).decided))
-        try ctx.builder.returnInst(return_val);
+    //if (!funcdef.return_type.match((try bbcTypes.CreateTypeVoid(ctx.allocator, false)).decided))
+    try ctx.builder.returnInst(return_val);
 
     try freeLocation(return_val, scopeCtx, ctx);
 }
@@ -512,7 +531,6 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
     _ = ast;
     var baseVarTable = VarPos.init(ctx.allocator);
     for (cctx.functions_to_compile.items) |func| {
-        std.debug.print("{s}\n", .{func.name});
         try baseVarTable.put(func.name, Inst.Location{ .label = func.name });
         try generateFunction(&func, &ctx, baseVarTable);
     }
@@ -527,8 +545,8 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
     //    }
     //}
 
-    for (ctx.builder.code.items, 0..) |inst, idx| {
-        inst.print(idx);
-    }
+    //for (ctx.builder.code.items, 0..) |inst, idx| {
+    //    inst.print(idx);
+    //}
     return ctx.builder;
 }

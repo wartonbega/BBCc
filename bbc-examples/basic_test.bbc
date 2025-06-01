@@ -1,11 +1,15 @@
 
-func <Type: Add, RetType: Add> toto (Type x, RetType y) RetType {
+func <Type: Add, RetType> toto (Type x, RetType y) RetType {
     let q = x + x
     y
 }
 
+func caca (String x) Void {
+    let w = 0
+}
+
 func main () Int {
-    let c = toto(1, 1 == 1)
-    let d = toto(1, 1)
+    let a = "TOTo"
+    caca(a)
     42
 }

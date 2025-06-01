@@ -408,6 +408,8 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
 pub fn inferTypeScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator, rettype: Type) !void {
     const voidType = try CreateTypeVoid(allocator, rettype.decided.err);
     const items = scope.code.items;
+    if (items.len == 0)
+        return;
     _ = ctx;
     try inferTypeValue(items[items.len - 1], scope.ctx, allocator, rettype);
     var i: usize = items.len - 1;

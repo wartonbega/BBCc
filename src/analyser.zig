@@ -339,10 +339,13 @@ pub fn analyseScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) std.
     allocator.destroy(scope.ctx); // Only works if the allocator used here is the same than in the lexer
 
     scope.ctx = try ctx.createChild(allocator);
-    for (scope.code.items[0 .. scope.code.items.len - 1]) |value| {
-        _ = try analyseValue(value, scope.ctx, allocator);
+    if (scope.code.items.len > 0) {
+        for (scope.code.items[0 .. scope.code.items.len - 1]) |value| {
+            _ = try analyseValue(value, scope.ctx, allocator);
+        }
+        return try analyseValue(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator);
     }
-    return try analyseValue(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator);
+    return Types.CreateTypeVoid(allocator, false);
 }
 
 pub fn createFunctionSignature(func: *ast.funcDef, allocator: Allocator) !*ast.Type {
@@ -417,23 +420,8 @@ fn containFunction(func: functionVersion, list: ArrayList(functionVersion)) bool
     // different functions won't have the same name)
     if (list.items.len > 0) {
         for (list.items) |compiled_func| {
-            if (std.mem.eql(u8, compiled_func.name, func.name) and func.version.count() == compiled_func.version.count()) {
-                var all_match = true;
-                var it = func.version.iterator();
-                while (it.next()) |kv| {
-                    const key = kv.key_ptr.*;
-                    if (!compiled_func.version.contains(key)) {
-                        all_match = false;
-                        break;
-                    }
-                    const v1 = kv.value_ptr.*;
-                    const v2 = compiled_func.version.get(key).?;
-                    if (!v1.matchType(v2)) {
-                        all_match = false;
-                        break;
-                    }
-                }
-                if (all_match) return true;
+            if (std.mem.eql(u8, compiled_func.name, func.name)) {
+                return true;
             }
         }
     }
@@ -458,12 +446,12 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         // fetching the function definition
         const func_def = ctx.getFunction(func.name);
 
-        try analyseFunction(func_def, ctx, allocator);
+        if (!containFunction(func, funcs_to_compile))
+            try analyseFunction(func_def, ctx, allocator);
 
         // We can verify that the current version of the function's types matches all the required traits
         try verifyFunctionTypeTraits(func_def, func_def.code.ctx, allocator, func);
-        if (containFunction(func, funcs_to_compile))
-            continue;
+
         try funcs_to_compile.append(func);
     }
     // Transpilation
