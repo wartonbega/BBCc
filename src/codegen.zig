@@ -54,6 +54,7 @@ const ScopeContext = struct {
     }
 
     pub fn getVariable(self: *const ScopeContext, name: []const u8) Inst.Location {
+        std.debug.print("##{s}\n", .{name});
         const loc = self.vars.get(name).?;
         switch (loc) {
             .stack => |s| {
@@ -313,13 +314,18 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             }
             // func should have the location 'label'
             func.label = ctx.getUid(analyser.functionVersion{ .name = func.label, .signature = functype, .version = func_version });
-            // Then we can move it to a more convinant location
-            const old_func_loc = func;
-            func = try pickWiselyLocation(ctx, scopeCtx, getCompileType(
-                (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided,
-                scopeCtx.version,
-            ));
-            try ctx.builder.moveInst(old_func_loc, func, Inst.Type{ .function = {} });
+
+            try scopeCtx.simstack.append(Inst.Type{ .function = {} });
+            const func_stack_loc_idx = scopeCtx.getCurrentStackIndex();
+            var func_stack_lock = Inst.Location{
+                .stack = .{
+                    .idx = func_stack_loc_idx,
+                    .stack_state = scopeCtx.getCurrentStackState(),
+                },
+            };
+            try ctx.builder.reserveStack(@intCast(8));
+            try ctx.builder.moveInst(func, func_stack_lock, Inst.Type{ .function = {} }); // We can reserve the function on the stack
+            try freeLocation(func, scopeCtx, ctx);
 
             var args = Arraylist(Inst.Location).init(ctx.allocator);
             for (funcall.args.items) |arg| {
@@ -342,27 +348,19 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             }
             //try saveRegistersFuncall(ctx, scopeCtx);
 
-            try scopeCtx.simstack.append(Inst.Type{ .function = {} });
-            const func_stack_loc_idx = scopeCtx.getCurrentStackIndex();
-            var func_stack_lock = Inst.Location{
-                .stack = .{
-                    .idx = scopeCtx.getCurrentStackIndex(),
-                    .stack_state = scopeCtx.getCurrentStackState(),
-                },
-            };
-            try ctx.builder.reserveStack(@intCast(8));
-            try ctx.builder.moveInst(func, func_stack_lock, Inst.Type{ .function = {} }); // We can reserve the function on the stack
-            try freeLocation(func, scopeCtx, ctx);
-
-            const funcretype = (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided.base.function.retype;
             func_stack_lock = Inst.Location{
                 .stack = .{
                     .idx = func_stack_loc_idx,
                     .stack_state = scopeCtx.getCurrentStackState(),
                 },
             };
+            std.debug.print("->{d}\n", .{func_stack_loc_idx});
+            for (scopeCtx.simstack.items) |tps| {
+                std.debug.print("({s}\n", .{@tagName(tps)});
+            }
             try ctx.builder.funcall(func_stack_lock, args);
 
+            const funcretype = (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided.base.function.retype;
             const ret_compile_type = getCompileType(
                 funcretype,
                 scopeCtx.version,
@@ -383,6 +381,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
         },
         .stringLit => |stringlit| {
             // Add the amout of memory on the stack ( len(stringlit) + (8 - len(stringlit)%8) + 8 )
+            // in order to keep the stack 8bits aligned
             // And place each characters and the len (on the first byte)
             // String_stack_size is only the size of the string itself
             // Memory layout :  | __SIZE__ | __STRING_LIT...__ |
@@ -530,7 +529,9 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
     };
     _ = ast;
     var baseVarTable = VarPos.init(ctx.allocator);
-    for (cctx.functions_to_compile.items) |func| {
+    while (cctx.functions_to_compile.items.len > 0) {
+        const func = cctx.functions_to_compile.pop().?;
+        std.debug.print("#[Generating {s}]\n", .{func.name});
         try baseVarTable.put(func.name, Inst.Location{ .label = func.name });
         try generateFunction(&func, &ctx, baseVarTable);
     }

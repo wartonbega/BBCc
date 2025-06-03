@@ -404,7 +404,8 @@ pub fn verifyFunctionTypeTraits(func: *ast.funcDef, ctx: *Context, allocator: Al
         const arg_type_traits = e.value_ptr.*; // ArrayList(Trait)
 
         if (!f_version.version.contains(arg_type_name))
-            errors.bbcErrorExit("The type '{s}' is nowhere found in the function's version", .{arg_type_name}, "");
+            continue;
+        //errors.bbcErrorExit("The type '{s}' is nowhere found in the function's version", .{arg_type_name}, "");
 
         const aliased = f_version.version.get(arg_type_name).?;
         if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, aliased, arg_type_traits))
@@ -438,6 +439,13 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
 
     var funcs_to_compile = ArrayList(functionVersion).init(allocator);
 
+    const main_func = ctx.getFunction("main");
+    try funcs_to_compile.append(functionVersion{
+        .signature = (try createFunctionSignature(main_func, allocator)).base.function,
+        .name = "main",
+        .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
+    });
+
     // we can analyse the main function
     try analyseFunction(ctx.getFunction("main"), ctx, allocator);
     while (ctx.functions_to_compile.items.len != 0) {
@@ -446,22 +454,16 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         // fetching the function definition
         const func_def = ctx.getFunction(func.name);
 
-        if (!containFunction(func, funcs_to_compile))
+        if (!containFunction(func, funcs_to_compile)) {
             try analyseFunction(func_def, ctx, allocator);
+            try funcs_to_compile.append(func);
+        }
 
         // We can verify that the current version of the function's types matches all the required traits
         try verifyFunctionTypeTraits(func_def, func_def.code.ctx, allocator, func);
-
-        try funcs_to_compile.append(func);
     }
     // Transpilation
     ctx.functions_to_compile = funcs_to_compile;
-    const main_func = ctx.getFunction("main");
-    try ctx.functions_to_compile.append(functionVersion{
-        .signature = (try createFunctionSignature(main_func, allocator)).base.function,
-        .name = "main",
-        .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
-    });
 
     if (!ctx.variableExist("main"))
         errors.bbcErrorExit("Missing function 'main'", .{}, "");
