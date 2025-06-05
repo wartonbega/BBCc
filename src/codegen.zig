@@ -54,7 +54,6 @@ const ScopeContext = struct {
     }
 
     pub fn getVariable(self: *const ScopeContext, name: []const u8) Inst.Location {
-        std.debug.print("##{s}\n", .{name});
         const loc = self.vars.get(name).?;
         switch (loc) {
             .stack => |s| {
@@ -354,10 +353,6 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                     .stack_state = scopeCtx.getCurrentStackState(),
                 },
             };
-            std.debug.print("->{d}\n", .{func_stack_loc_idx});
-            for (scopeCtx.simstack.items) |tps| {
-                std.debug.print("({s}\n", .{@tagName(tps)});
-            }
             try ctx.builder.funcall(func_stack_lock, args);
 
             const funcretype = (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided.base.function.retype;
@@ -462,13 +457,7 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
     return ret;
 }
 
-pub fn generateFunction(func: *const analyser.functionVersion, ctx: *Context, baseVarTable: VarPos) !void {
-    const function_uid = try generateFuncUID(func.name, &ctx.func_id_table_counter, ctx.allocator);
-    try ctx.func_uid_list.append(.{
-        .uid = function_uid,
-        .version = func.*,
-    });
-
+pub fn generateFunction(func: *const analyser.functionVersion, function_uid: []const u8, ctx: *Context, baseVarTable: VarPos) !void {
     // declare function (add label)
     try ctx.builder.functionDec(function_uid);
 
@@ -512,7 +501,7 @@ pub fn generateFuncUID(funcname: []const u8, f_table: *std.hash_map.StringHashMa
 
     const func_num = f_table.get(funcname).?;
 
-    const id = try std.fmt.allocPrint(alloc, "{s}{d}", .{ funcname, func_num });
+    const id = try std.fmt.allocPrint(alloc, "{s}@{d}", .{ funcname, func_num });
     try f_table.put(funcname, func_num + 1);
     return id;
 }
@@ -527,27 +516,26 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
         .func_id_table_counter = std.hash_map.StringHashMap(usize).init(alloc),
         .func_uid_list = .init(alloc),
     };
+
+    var functions_uid = Arraylist([]const u8).init(alloc);
+    for (cctx.functions_to_compile.items) |func| {
+        const function_uid = try generateFuncUID(func.name, &ctx.func_id_table_counter, ctx.allocator);
+        try ctx.func_uid_list.append(.{
+            .uid = function_uid,
+            .version = func,
+        });
+        try functions_uid.append(function_uid);
+    }
+
     _ = ast;
     var baseVarTable = VarPos.init(ctx.allocator);
     while (cctx.functions_to_compile.items.len > 0) {
         const func = cctx.functions_to_compile.pop().?;
-        std.debug.print("#[Generating {s}]\n", .{func.name});
+        const f_uid = functions_uid.pop().?;
+        std.debug.print("#[Generating {s}]\n", .{f_uid});
         try baseVarTable.put(func.name, Inst.Location{ .label = func.name });
-        try generateFunction(&func, &ctx, baseVarTable);
+        try generateFunction(&func, f_uid, &ctx, baseVarTable);
     }
 
-    //for (ast.instructions.items) |inst| {
-    //    switch (inst.*) {
-    //        .FuncDef => |func| {
-    //            // Declaring the function as a value in a label
-    //            try baseVarTable.put(func.name, Inst.Location{ .label = func.name });
-    //            try generateFunction(func, &ctx, baseVarTable);
-    //        },
-    //    }
-    //}
-
-    //for (ctx.builder.code.items, 0..) |inst, idx| {
-    //    inst.print(idx);
-    //}
     return ctx.builder;
 }

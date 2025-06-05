@@ -86,7 +86,32 @@ pub fn CreateTypeVoid(allocator: Allocator, err: bool) !Type {
 ///                                             ///
 ///////////////////////////////////////////////////
 
-pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) !Type {
+pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Context, allocator: Allocator) !std.hash_map.StringHashMap(Type) {
+    var func_version = std.hash_map.StringHashMap(Type).init(allocator);
+    for (func.args.items, functype.argtypes.items) |a, b| {
+        const argtype = try getTypeOfValue(a, ctx, allocator);
+        switch (argtype) {
+            .undecided => errors.bbcErrorExit("Unable to determine the type of the argument", .{}, ""),
+            .decided => {
+                // If there's a type alias, then we get to assign it
+                if (b.*.base == .name and analyser.typeparamContains(functype.typeparam, b.base.name)) {
+                    if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
+                        errors.bbcErrorExit("'{s}'' is already set to be type '{s}'", .{
+                            b.*.base.name,
+                            func_version.get(b.*.base.name).?.toString(allocator),
+                        }, "");
+                    }
+                    try func_version.put(b.*.base.name, argtype);
+                } else if (!argtype.decided.match(b)) {
+                    errors.bbcErrorExit("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, "");
+                }
+            },
+        }
+    }
+    return func_version;
+}
+
+pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.mem.Allocator.Error!Type {
     return switch (value.*) {
         .intLit => try CreateTypeInt(allocator, false),
         .stringLit => try CreateTypeString(allocator, false),
@@ -103,8 +128,32 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) !T
         },
         .scope => try analyser.analyseScope(value.scope, ctx, allocator),
         .funcall => |func| blk: {
-            const ret = try analyser.analyseFuncall(func, ctx, allocator);
-            break :blk ret;
+            // We have to borrow a the majority of the code from analyse.analysefuncall,
+            // because it's slightly different here
+            const f_signature = try getTypeOfValue(func.func, ctx, allocator);
+            // returns the return type of the function
+            switch (f_signature) {
+                .undecided => return f_signature,
+                .decided => |t| {
+                    switch (t.base) {
+                        .name => |name| errors.bbcErrorExit("Can't call a non-function value of type {s}", .{name}, ""),
+                        .function => |functype| {
+                            if (func.args.items.len != functype.argtypes.items.len)
+                                errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ func.args.items.len, functype.argtypes.items.len }, "");
+                            // We can build the current function version, which shall have to be compiled later
+                            var func_version = try getFuncallVersion(func, functype, ctx, allocator);
+                            const ret_type = t.base.function.retype.base;
+                            if (ret_type == .name and analyser.typeparamContains(t.base.function.typeparam, ret_type.name)) {
+                                if (!func_version.contains(ret_type.name))
+                                    errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, "");
+                                break :blk func_version.get(ret_type.name).?;
+                            }
+                            break :blk Type{ .decided = t.base.function.retype };
+                        },
+                    }
+                },
+            }
+            break :blk Type{ .undecided = ArrayList(traits.Trait).init(allocator) };
         },
         .binaryOperator => |binop| analyser.analyseBinOp(
             binop.operator,

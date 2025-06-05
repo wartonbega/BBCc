@@ -1,16 +1,12 @@
 
 func toto (Int q) Int {
-    q
-}
-
-func stringFunc (String x) Int {
-    0
+    q + 1
 }
 
 func caca (Int x) Int {
-    toto(x)
+    toto(x) + 1
 }
 
 func main () Int {
-    stringFunc("A")
+    caca(1)
 }

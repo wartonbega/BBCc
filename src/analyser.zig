@@ -208,7 +208,7 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
                             .undecided => return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) },
                             .decided => {
                                 // If there's a type alias, then we get to assign it
-                                if (b.*.base == .name and typeparamContains(t.base.function.typeparam, b.base.name)) {
+                                if (b.*.base == .name and typeparamContains(functype.typeparam, b.base.name)) {
                                     if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
                                         errors.bbcErrorExit("'{s}'' is already set to be type '{s}'", .{
                                             b.*.base.name,

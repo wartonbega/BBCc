@@ -35,7 +35,6 @@ fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
             try writer.print("\txor r15, r15\n", .{});
             for (d.idx..d.stack_state.items.len) |i| {
                 const ttype = d.stack_state.items[d.stack_state.items.len - i];
-                std.debug.print("{s}\n", .{@tagName(ttype)});
                 if (isAlloced(ttype)) {
                     if (size_accumulator != 0)
                         try writer.print("\tadd r15, {d}\n", .{size_accumulator});
@@ -227,10 +226,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                     _ = try prepareForLoc(writer, arg);
                     try writer.print("\tmov {s}, {s}\n", .{ reg(destreg), dumpLocation(arg) });
                 }
-                std.debug.print("------\n", .{});
-                _ = try writer.write(";;----\n");
                 _ = try prepareForLoc(writer, funcall.func);
-                std.debug.print("------\n", .{});
                 try writer.print("\tcall {s}\n", .{dumpLocation(funcall.func)});
             },
             .Plus => |plus| {
