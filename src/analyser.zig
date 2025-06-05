@@ -150,7 +150,6 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                 lhs_type.err = false;
                 try ctx.createVariable(vardec.name, Types.Type{ .decided = lhs_type });
             } else try ctx.createVariable(vardec.name, rightType); // We can just set it without copying, it's alright
-
         },
         .identifier => |ident| {
             if (!ctx.variableExist(ident))
@@ -300,8 +299,8 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         .varDec => |vardec| {
             if (ctx.variableExist(vardec.name))
                 errors.bbcErrorExit("The variable {s} has already been declared before", .{vardec.name}, "");
-            const ret_type = Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
-            try ctx.createVariable(vardec.name, ret_type);
+            const ret_type = try Types.CreateTypeVoid(allocator, false);
+            try ctx.createVariable(vardec.name, Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) });
             return ret_type;
         },
         .binaryOperator => |binop| {
@@ -314,7 +313,6 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         },
         .assignement => |assing| {
             const rhsType = try analyseValue(assing.rhs, ctx, allocator);
-            // TODO: rhsType should be without error, because the error is diverted to the assignement operator
             try analyseAssignationLhs(assing.lhs, ctx, allocator, rhsType);
 
             return switch (rhsType) {
@@ -323,9 +321,24 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             };
         },
         .If => |ifstmt| {
-            _ = try analyseScope(ifstmt.scope, ctx, allocator);
-            _ = try analyseValue(ifstmt.condition, ifstmt.scope.ctx, allocator);
-            return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
+            // the number of scopes and conditions is the same (trust me hehe) and greater than 0
+            // All scopes should evaluate to the same type: the type of the first scope
+            const base_scope_type = try analyseScope(ifstmt.scopes.getLast(), ctx, allocator);
+            const bool_type = try Types.CreateTypeBool(allocator, false);
+            for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
+                const scope_type = try analyseScope(scope, ctx, allocator);
+                const cond_type = try analyseValue(cond, ctx, allocator);
+                if (!scope_type.matchType(base_scope_type))
+                    errors.bbcErrorExit("The type of this scope don't match the return type of the if statement", .{}, "");
+                if (!cond_type.matchType(bool_type))
+                    errors.bbcErrorExit("The type of this condition does not match 'Bool'", .{}, "");
+            }
+            if (ifstmt.elsescope) |else_scope| {
+                const else_type = try analyseScope(else_scope, ctx, allocator);
+                if (!else_type.matchType(base_scope_type))
+                    errors.bbcErrorExit("The type of the else scope don't match the type of this if statement", .{}, "");
+            }
+            return base_scope_type;
         },
         .parenthesis => |val| return try analyseValue(val, ctx, allocator),
         .scope => |scope| return try analyseScope(scope, ctx, allocator),
@@ -453,14 +466,14 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     var funcs_to_compile = ArrayList(functionVersion).init(allocator);
 
     const main_func = ctx.getFunction("main");
-    try funcs_to_compile.append(functionVersion{
+    try ctx.functions_to_compile.append(functionVersion{
         .signature = (try createFunctionSignature(main_func, allocator)).base.function,
         .name = "main",
         .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
     });
 
     // we can analyse the main function
-    try analyseFunction(ctx.getFunction("main"), ctx, allocator);
+    //try analyseFunction(ctx.getFunction("main"), ctx, allocator);
     while (ctx.functions_to_compile.items.len != 0) {
         const func = ctx.functions_to_compile.pop().?;
 

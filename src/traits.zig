@@ -292,7 +292,7 @@ fn getTypeLeafes(value: *ast.Value, ctx: *analyser.Context, allocator: std.mem.A
     };
 }
 
-pub fn getTypeTraits(instruction: *ast.Value, ctx: *analyser.Context, allocator: std.mem.Allocator) !std.hash_map.StringHashMap(ArrayList(Trait)) {
+pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allocator: std.mem.Allocator) !std.hash_map.StringHashMap(ArrayList(Trait)) {
     // Return all the traits associated with each types in the scope
     var ret = std.hash_map.StringHashMap(ArrayList(Trait)).init(allocator);
     switch (instruction.*) {
@@ -335,6 +335,15 @@ pub fn getTypeTraits(instruction: *ast.Value, ctx: *analyser.Context, allocator:
                     }
                 },
                 .undecided => {},
+            }
+        },
+        .If => |ifstmt| {
+            for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
+                try traitUnion(&ret, &try getTypeTraits(cond, ctx, allocator));
+                try traitUnion(&ret, &try getTypeTraits(&ast.Value{ .scope = scope }, ctx, allocator));
+            }
+            if (ifstmt.elsescope) |else_scope| {
+                try traitUnion(&ret, &try getTypeTraits(&ast.Value{ .scope = else_scope }, ctx, allocator));
             }
         },
         else => {

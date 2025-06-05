@@ -25,6 +25,7 @@ const Context = struct {
         uid: []const u8,
         version: analyser.functionVersion,
     }),
+    labels: std.hash_map.StringHashMap(usize), // General purpose label (if statements, loops, etc)
 
     pub fn getUid(self: *Context, version: analyser.functionVersion) []const u8 {
         base_for: for (self.func_uid_list.items) |func| {
@@ -43,6 +44,16 @@ const Context = struct {
         }
         std.debug.print("[INTERN ERROR]: Couldnt find version for {s}\n", .{version.name});
         return version.name;
+    }
+
+    pub fn generateLabel(self: *Context, base: []const u8) ![]const u8 {
+        var count: usize = @intCast(0);
+        if (self.labels.contains(base)) {
+            count = self.labels.get(base).?;
+        } else {
+            try self.labels.put(base, count);
+        }
+        return try std.fmt.allocPrint(self.allocator, "{s}_{d}", .{ base, count });
     }
 };
 
@@ -418,6 +429,33 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             try ctx.builder.print(ret_loc);
             return ret_loc;
         },
+        .If => |ifstmt| {
+            const end_label = try ctx.generateLabel("end_if");
+            const compile_type = getCompileType((try analyser.analyseScope(ifstmt.scopes.items[0], scopeCtx.context, ctx.allocator)).decided, scopeCtx.version);
+            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, compile_type);
+
+            // We can generate each scope one by one
+            for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
+                const next_label = try ctx.generateLabel("ifstmt_cond");
+                const _test = try generateValue(cond, scopeCtx, ctx);
+                try ctx.builder.not(_test);
+                try ctx.builder.conditionalJump(_test, next_label);
+                const scope_ret_loc = try generateScope(scope, scopeCtx, ctx);
+                if (compile_type != .voidType)
+                    try ctx.builder.moveInst(scope_ret_loc, ret_loc, compile_type);
+                try ctx.builder.jump(end_label);
+                try ctx.builder.labelDec(next_label);
+            }
+
+            // Then if it exists, the else statement
+            if (ifstmt.elsescope) |else_scope| {
+                const else_scope_ret_loc = try generateScope(else_scope, scopeCtx, ctx);
+                if (compile_type != .voidType)
+                    try ctx.builder.moveInst(else_scope_ret_loc, ret_loc, compile_type);
+            }
+            try ctx.builder.labelDec(end_label);
+            return ret_loc;
+        },
         else => {
             std.debug.print("Unimplemented: {}\n", .{value.*});
             unreachable;
@@ -469,7 +507,6 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
     try ctx.builder.comment("Return value of scope");
     const ret_type = getCompileType((try bbcTypes.getTypeOfValue(scope.code.getLast(), scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
     const ret = try generateValue(scope.code.getLast(), newScopeCtx, ctx);
-    std.debug.print("ret_type {s}\n", .{(try bbcTypes.getTypeOfValue(scope.code.getLast(), scopeCtx.context, ctx.allocator)).toString(ctx.allocator)});
     if (ret_type.hasError())
         try ctx.builder.conditionalJump(Inst.Location{ .label = &error_union_label.* }, &error_union_function.*);
 
@@ -531,6 +568,7 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
         .registers = Inst.RegisterTable.init(),
         .func_id_table_counter = std.hash_map.StringHashMap(usize).init(alloc),
         .func_uid_list = .init(alloc),
+        .labels = .init(alloc),
     };
 
     var functions_uid = Arraylist([]const u8).init(alloc);

@@ -1,10 +1,15 @@
 
-func caca (Int x) !Int {
-    68 / x
+func toto (Int x) !Int {
+    let b
+    if 1 == x {
+        b = 1
+        let a = "toto"
+    } else {
+        b = 2
+    }
+    b
 }
 
 func main () !Int {
-    let a = caca(1)
-    let b = "toto"
-    0
+    toto(2)
 }

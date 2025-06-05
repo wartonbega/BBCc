@@ -116,7 +116,7 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
         .intLit => try CreateTypeInt(allocator, false),
         .stringLit => try CreateTypeString(allocator, false),
         .charLit => try CreateTypeChar(allocator, false),
-        .varDec => Type{ .undecided = ArrayList(traits.Trait).init(allocator) },
+        .varDec => try CreateTypeVoid(allocator, false),
         .assignement => |assign| blk: {
             const rhs_type = try getTypeOfValue(assign.rhs, ctx, allocator);
             if (rhs_type == .undecided)
@@ -167,6 +167,24 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
             try getTypeOfValue(binop.lhs, ctx, allocator),
             allocator,
         ),
+        .If => |ifstmt| blk: {
+            const base_scope_type = try analyser.analyseScope(ifstmt.scopes.getLast(), ctx, allocator);
+            const bool_type = try CreateTypeBool(allocator, false);
+            for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
+                const scope_type = try analyser.analyseScope(scope, ctx, allocator);
+                const cond_type = try analyser.analyseValue(cond, ctx, allocator);
+                if (!scope_type.matchType(base_scope_type))
+                    errors.bbcErrorExit("The type of this scope don't match the return type of the if statement", .{}, "");
+                if (!cond_type.matchType(bool_type))
+                    errors.bbcErrorExit("The type of this condition does not match 'Bool'", .{}, "");
+            }
+            if (ifstmt.elsescope) |else_scope| {
+                const else_type = try analyser.analyseScope(else_scope, ctx, allocator);
+                if (!else_type.matchType(base_scope_type))
+                    errors.bbcErrorExit("The type of the else scope don't match the type of this if statement", .{}, "");
+            }
+            break :blk base_scope_type;
+        },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
             unreachable;
@@ -457,7 +475,17 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .binaryOperator => |binop| {
             try inferTypeBinOperation(binop.lhs, binop.rhs, binop.operator, ctx, allocator, expType);
         },
+        .If => |ifstmt| {
+            const bool_type = try CreateTypeBool(allocator, false);
+            for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
+                try inferTypeScope(scope, ctx, allocator, expType);
+                try inferTypeValue(cond, ctx, allocator, bool_type);
+            }
+            if (ifstmt.elsescope) |else_scope|
+                try inferTypeScope(else_scope, ctx, allocator, expType);
+        },
         else => {
+            std.debug.print("Unimplemented {}\n", .{value});
             unreachable;
         },
     }

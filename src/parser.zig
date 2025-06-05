@@ -24,10 +24,10 @@ pub const TokenType = enum {
 
     // Keywords
     FN_DEC, // 'fn'
-    IF,
     LET, // 'let a = b'
-    ELSE,
+    IF,
     ELIF,
+    ELSE,
 
     IDENT, // identifier
     INTLIT, // Integer literal
@@ -60,6 +60,12 @@ fn getIdentType(ident: []const u8) TokenType {
     }
     if (std.mem.eql(u8, ident, "if")) {
         return TokenType.IF;
+    }
+    if (std.mem.eql(u8, ident, "elif")) {
+        return TokenType.ELIF;
+    }
+    if (std.mem.eql(u8, ident, "else")) {
+        return TokenType.ELSE;
     }
     if (std.mem.eql(u8, ident, "let")) {
         return TokenType.LET;

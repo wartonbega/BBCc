@@ -257,6 +257,12 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 try writer.print("\ttest r15, r15\n", .{});
                 try writer.print("\tjnz {s}\n", .{inst.label});
             },
+            .Jump => |inst| {
+                try writer.print("\tjmp {s}\n", .{inst.label});
+            },
+            .Label => |inst| {
+                try writer.print("{s}:\n", .{inst});
+            },
             // Here begins operators
             .Plus => |plus| {
                 _ = try prepareForLoc(writer, plus.x);
@@ -377,6 +383,10 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(ge.x), dumpLocation(ge.y) });
                 try writer.print("\tsetge al\n", .{});
                 try writer.print("\tmovzx {s}, al\n", .{dumpLocation(ge.x)});
+            },
+            .Not => |not| {
+                _ = try prepareForLoc(writer, not);
+                try writer.print("\txor {s}, 1\n", .{dumpLocation(not)});
             },
             else => unreachable,
         }

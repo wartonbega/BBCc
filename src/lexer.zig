@@ -109,12 +109,27 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
 
     switch ((try reader.peek()).type) {
         TokenType.IF => {
+            var conditions = ArrayList(*ast.Value).init(allocator);
+            var scopes = ArrayList(*ast.Scope).init(allocator);
+            var else_scope: ?*ast.Scope = null;
+
             _ = reader.consume(TokenType.IF);
-            const condition = try lexeValue0(reader, allocator);
-            const scope = try lexeScope(reader, allocator);
+            try conditions.append(try lexeValue0(reader, allocator));
+            try scopes.append(try lexeScope(reader, allocator));
+
+            while (reader.canPeek() and (try reader.peek()).type == .ELIF) {
+                _ = reader.consume(.ELIF);
+                try conditions.append(try lexeValue0(reader, allocator));
+                try scopes.append(try lexeScope(reader, allocator));
+            }
+            if (reader.canPeek() and (try reader.peek()).type == .ELSE) {
+                _ = reader.consume(.ELSE);
+                else_scope = try lexeScope(reader, allocator);
+            }
+
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.IfStmt);
-            operation.* = ast.IfStmt{ .condition = condition, .scope = scope };
+            operation.* = ast.IfStmt{ .conditions = conditions, .scopes = scopes, .elsescope = else_scope };
             ret.* = ast.Value{ .If = operation };
             return ret;
         },

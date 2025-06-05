@@ -182,7 +182,13 @@ pub const RightUnaryOperators = union(enum) {
 
 pub const UnaryOperatorRight = struct { operator: RightUnaryOperators, expr: *Value };
 
-pub const IfStmt = struct { condition: *Value, scope: *Scope };
+// If statement, the multiple elif conditions are stored in conditions, and the corresponding scopes in scopes
+// finally the else statement is in elsescope
+pub const IfStmt = struct {
+    conditions: ArrayList(*Value),
+    scopes: ArrayList(*Scope),
+    elsescope: ?*Scope,
+};
 
 pub const VarDeclaration = struct {
     mutable: bool,
