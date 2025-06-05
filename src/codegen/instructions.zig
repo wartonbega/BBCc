@@ -64,17 +64,25 @@ pub const Value = struct {
 };
 
 pub const Type = union(enum) {
-    voidType: void,
-    intType: void,
-    boolType: void,
-    stringType: void,
-    arrayLike: void,
-    charType: void,
-    pointer: void,
+    // The boolean is for error union
+    voidType: bool,
+    intType: bool,
+    boolType: bool,
+    stringType: bool,
+    arrayLike: bool,
+    charType: bool,
+    pointer: bool,
     function: void,
     structType: struct {
         habitants: []const Type,
     },
+
+    pub fn hasError(self: *const Type) bool {
+        switch (self.*) {
+            .voidType, .intType, .boolType, .stringType, .arrayLike, .charType, .pointer => |eu| return eu,
+            else => return false,
+        }
+    }
 };
 
 pub fn getCompileSize(t: Type) i64 {
@@ -97,6 +105,11 @@ pub fn isAlloced(t: Type) bool {
         .charType, .intType, .boolType, .pointer, .function, .voidType, .stringType => false,
     };
 }
+
+pub const varContentType = std.ArrayList(struct {
+    size: usize,
+    content: []const u8,
+});
 
 pub const Instructions = union(enum) {
     Plus: struct {
@@ -158,7 +171,10 @@ pub const Instructions = union(enum) {
     getBasePointer: Location,
     getStackPointer: Location,
     Return: Location,
+    ConditionalJump: struct { value: Location, label: []const u8 },
     Function: []const u8,
+    BeginFunction: void,
+    EndFunction: void,
     Move: struct {
         from: Location,
         to: Location,
@@ -181,6 +197,11 @@ pub const Instructions = union(enum) {
         func: Location,
         args: Array(Location),
     },
+    beginVariableSection: void,
+    declareVariable: struct { // under a label, there can be multiple segments of memory
+        name: []const u8,
+        content: varContentType,
+    },
 
     pub fn print(self: *const Instructions, idx: usize) void {
         std.debug.print("#{d}", .{idx});
@@ -199,6 +220,8 @@ pub const Instructions = union(enum) {
             .reserveStack => |inst| std.debug.print("\tReserveStack({d})\n", .{inst}),
             .Return => |inst| std.debug.print("\tReturn({})\n", .{inst}),
             .Function => |inst| std.debug.print("Function {s}\n", .{inst}),
+            .BeginFunction => |_| std.debug.print("\tBegining function:...\n", .{}),
+            .EndFunction => |_| std.debug.print("\tEnding function:...\n", .{}),
             .Move => |inst| std.debug.print("\tMove {} to {} (type {})\n", .{ inst.from, inst.to, inst._type }),
             .loadAddress => |inst| std.debug.print("\tLoad address {} to {}\n", .{ inst.from, inst.to }),
             .CopyOnStack => |inst| std.debug.print("\tCopy {} on stack (type {})\n", .{ inst.from, inst._type }),
@@ -206,6 +229,7 @@ pub const Instructions = union(enum) {
             .ExitWith => |inst| std.debug.print("\tExit({})\n", .{inst}),
             .Print => |inst| std.debug.print("\tPrint({})\n", .{inst}),
             .Comment => |comment| std.debug.print("\t// {s}\n", .{comment}),
+            .ConditionalJump => |cond| std.debug.print("\tConditional jump if {}, to {s}", .{ cond.value, cond.label }),
             .Funcall => |func| {
                 std.debug.print("\tCall {}(", .{func.func});
                 for (func.args.items) |a| {
@@ -219,6 +243,8 @@ pub const Instructions = union(enum) {
             .CharLit => |inst| std.debug.print("\tCharlit {d} in {}\n", .{ inst.val, inst.to }),
             .writeArrayElement => |inst| std.debug.print("\tWriteArrayElement(arr: {}, idx: {d}, value: {}, type: {})\n", .{ inst.arr, inst.idx, inst.value, inst._type }),
             .decreaseStack => |inst| std.debug.print("\tDecreaseStack({})\n", .{inst}),
+            .declareVariable => |inst| std.debug.print("\tDeclaring variable {s} ...\n", .{inst.name}),
+            .beginVariableSection => std.debug.print("Begining variable section:\n", .{}),
         }
     }
 };
@@ -265,8 +291,20 @@ pub const Builder = struct {
         try self.code.append(Instructions{ .Comment = com });
     }
 
+    pub fn conditionalJump(self: *Builder, val: Location, label: []const u8) !void {
+        try self.code.append(Instructions{ .ConditionalJump = .{ .value = val, .label = label } });
+    }
+
     pub fn functionDec(self: *Builder, name: []const u8) !void {
         try self.code.append(Instructions{ .Function = name });
+    }
+
+    pub fn beginFunction(self: *Builder) !void {
+        try self.code.append(Instructions{ .BeginFunction = {} });
+    }
+
+    pub fn endFunction(self: *Builder) !void {
+        try self.code.append(Instructions{ .EndFunction = {} });
     }
 
     pub fn returnInst(self: *Builder, loc: Location) !void {
@@ -346,6 +384,14 @@ pub const Builder = struct {
 
     pub fn funcall(self: *Builder, func: Location, args: Array(Location)) !void {
         try self.code.append(Instructions{ .Funcall = .{ .func = func, .args = args } });
+    }
+
+    pub fn declareVariable(self: *Builder, name: []const u8, content: *const varContentType) !void {
+        try self.code.append(Instructions{ .declareVariable = .{ .name = name, .content = content.* } });
+    }
+
+    pub fn beginVariableSection(self: *Builder) !void {
+        try self.code.append(Instructions{ .beginVariableSection = {} });
     }
 };
 

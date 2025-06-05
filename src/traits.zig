@@ -45,7 +45,7 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
 
     // Implementing int + int -> int
     var int_implems = ArrayList(analyser.funcPair).init(allocator);
-    for ([_]ast.binOperator{ .Plus, .Minus, .Times, .Div, .Modulus }) |op| {
+    for ([_]ast.binOperator{ .Plus, .Minus, .Times, .Modulus }) |op| {
         try int_implems.append(.{
             .name = ast.binOpFuncName(op),
             .signature = ast.TypeFunc{
@@ -60,6 +60,21 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
             },
         });
     }
+
+    // Implementing int / int -> !int
+    try int_implems.append(.{
+        .name = ast.binOpFuncName(.Div),
+        .signature = ast.TypeFunc{
+            .argtypes = blk: {
+                var args = ArrayList(*ast.Type).init(allocator);
+                try args.append(int_type.decided);
+                break :blk args;
+            },
+            .retype = (try Types.CreateTypeInt(allocator, true)).decided,
+            .typeparam = ArrayList(ast.TypeParam).init(allocator),
+            .fname = stringFromTrait(traitFromOperator(.Div)),
+        },
+    });
 
     // int + bool -> int
     for ([_]ast.binOperator{ .Plus, .Minus, .Times }) |op| {

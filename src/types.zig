@@ -117,7 +117,12 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
         .stringLit => try CreateTypeString(allocator, false),
         .charLit => try CreateTypeChar(allocator, false),
         .varDec => Type{ .undecided = ArrayList(traits.Trait).init(allocator) },
-        .assignement => try CreateTypeVoid(allocator, false), // [TODO]: change wether it is !Void, if the right hand side can return an error
+        .assignement => |assign| blk: {
+            const rhs_type = try getTypeOfValue(assign.rhs, ctx, allocator);
+            if (rhs_type == .undecided)
+                errors.bbcErrorExit("Can't decide the type of the right hand side of the assignation", .{}, "");
+            break :blk try CreateTypeVoid(allocator, rhs_type.decided.err);
+        },
         .parenthesis => try getTypeOfValue(value.parenthesis, ctx, allocator),
         .identifier => |ident| blk: {
             if (ctx.functionExist(ident))
@@ -211,9 +216,9 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
             errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, "");
 
         if (!func_version.get(ret_type.name).?.match(expType.decided))
-            errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ signature.retype.toString(allocator), expType.toString(allocator) }, "");
+            errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, "");
     } else if (!signature.retype.match(expType.decided))
-        errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ signature.retype.toString(allocator), expType.toString(allocator) }, "");
+        errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, "");
 
     try ctx.addFunctionToCompile(analyser.functionVersion{
         .name = signature.fname,
@@ -412,8 +417,12 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                                 errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's {s}", .{ rhsType.toString(allocator), lhsType.toString(allocator) }, "");
                         },
                         .undecided => {
-                            try inferTypeValue(assign.lhs, ctx, allocator, rhsType);
-                            try inferTypeValue(assign.rhs, ctx, allocator, rhsType);
+                            if (rhsType.decided.err) {
+                                const lhs_type = try allocator.create(ast.Type);
+                                lhs_type.* = rhsType.decided.*;
+                                lhs_type.err = false;
+                                try inferTypeValue(assign.lhs, ctx, allocator, Type{ .decided = lhs_type });
+                            } else try inferTypeValue(assign.lhs, ctx, allocator, rhsType);
                         },
                     }
                     try inferTypeValue(assign.rhs, ctx, allocator, rhsType);

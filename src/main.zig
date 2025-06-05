@@ -20,5 +20,5 @@ pub fn main() !void {
 
     const builder = try codegen.generateProgram(prog, ctx, arena.allocator());
 
-    try x86.dumpAssemblyX86(&builder);
+    try x86.dumpAssemblyX86(&builder, &codegen.main_function_wrapper_name.*);
 }

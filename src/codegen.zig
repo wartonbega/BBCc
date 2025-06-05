@@ -10,6 +10,11 @@ const VarHashmap = std.hash_map.StringHashMap(bbcTypes.Type);
 const VarPos = std.hash_map.StringHashMap(Inst.Location);
 const Arraylist = std.ArrayList;
 
+// here are defined global variables for the code generation
+const error_union_function = "_error_union_callback";
+const error_union_label = "_error_union";
+pub const main_function_wrapper_name = "main_wrapper";
+
 const Context = struct {
     codeContext: *analyser.Context,
     allocator: std.mem.Allocator,
@@ -87,14 +92,16 @@ pub fn getCompileType(t: *Ast.Type, version: std.hash_map.StringHashMap(bbcTypes
             if (version.contains(name))
                 return getCompileType(version.get(name).?.decided, version);
             if (std.mem.eql(u8, name, "Int"))
-                return Inst.Type{ .intType = {} };
+                return Inst.Type{ .intType = t.err };
             if (std.mem.eql(u8, name, "Bool"))
-                return Inst.Type{ .intType = {} };
+                return Inst.Type{ .intType = t.err };
             if (std.mem.eql(u8, name, "String"))
-                return Inst.Type{ .stringType = {} };
+                return Inst.Type{ .stringType = t.err };
+            if (std.mem.eql(u8, name, "Void"))
+                return Inst.Type{ .voidType = t.err };
         },
     }
-    return Inst.Type{ .intType = {} };
+    return Inst.Type{ .intType = false };
 }
 
 const getCompileSize = Inst.getCompileSize;
@@ -182,11 +189,11 @@ pub fn saveRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
 
     for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
         if (utilised) {
-            try scopeCtx.simstack.append(Inst.Type{ .intType = {} });
+            try scopeCtx.simstack.append(Inst.Type{ .intType = false });
             try ctx.builder.moveInst(
                 Inst.Location{ .register = reg },
                 Inst.Location{ .stack = reg },
-                Inst.Type{ .intType = {} }, // As we this is just a workarround to manipulate registers,
+                Inst.Type{ .intType = false }, // As we this is just a workarround to manipulate registers,
                 // we can just say it is int
             );
         }
@@ -204,7 +211,7 @@ pub fn loadRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
                         .stack_state = scopeCtx.getCurrentStackState(),
                     },
                 },
-                Inst.Type{ .intType = {} }, // As we this is just a workarround to manipulate registers,
+                Inst.Type{ .intType = false }, // As we this is just a workarround to manipulate registers,
                 // we can just say it is int
             );
             scopeCtx.simstack.pop();
@@ -241,7 +248,6 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
             .Plus => try ctx.builder.plus(lhs_loc, rhs_loc),
             .Minus => try ctx.builder.minus(lhs_loc, rhs_loc),
             .Times => try ctx.builder.multiply(lhs_loc, rhs_loc),
-            .Div => try ctx.builder.divide(lhs_loc, rhs_loc),
             .Modulus => try ctx.builder.modulo(lhs_loc, rhs_loc),
             .Equal => try ctx.builder.equal(lhs_loc, rhs_loc),
             .NotEqual => try ctx.builder.notEqual(lhs_loc, rhs_loc),
@@ -249,6 +255,11 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
             .Le => try ctx.builder.lessEqual(lhs_loc, rhs_loc),
             .Gt => try ctx.builder.greaterThan(lhs_loc, rhs_loc),
             .Ge => try ctx.builder.greaterEqual(lhs_loc, rhs_loc),
+            .Div => { // Div can return an error
+                try ctx.builder.divide(lhs_loc, rhs_loc);
+                try ctx.builder.intLit(1, .{ .register = .r0 });
+                try ctx.builder.moveInst(Inst.Location{ .register = .r0 }, .{ .label = &error_union_label.* }, .{ .intType = false });
+            },
             else => unreachable,
         }
         return res_loc;
@@ -264,7 +275,7 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
 pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Context) Allocator.Error!Inst.Location {
     switch (value.*) {
         .intLit => |intlit| {
-            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = {} });
+            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
             try ctx.builder.intLit(@intCast(intlit), dest);
             return dest;
         },
@@ -383,7 +394,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             //                  |    8     |        ...        |
             const string_stack_size = stringlit.len + 8 - (stringlit.len % 8);
 
-            try scopeCtx.simstack.append(Inst.Type{ .arrayLike = {} });
+            try scopeCtx.simstack.append(Inst.Type{ .arrayLike = false });
             try ctx.builder.reserveStack(@intCast(string_stack_size + 8));
 
             // We write the size on the stack
@@ -394,14 +405,14 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 },
             });
 
-            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .pointer = {} });
+            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .pointer = false });
             try ctx.builder.getStackPointer(ret_loc);
 
             // Then write the rest of the string
             for (stringlit, 0..) |char, idx| {
-                const char_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .charType = {} });
+                const char_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .charType = false });
                 try ctx.builder.charLit(char, char_loc);
-                try ctx.builder.writeArrayElement(ret_loc, idx, char_loc, Inst.Type{ .charType = {} });
+                try ctx.builder.writeArrayElement(ret_loc, idx, char_loc, Inst.Type{ .charType = false });
                 try freeLocation(char_loc, scopeCtx, ctx);
             }
             try ctx.builder.print(ret_loc);
@@ -416,7 +427,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
 
 pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Context) !Inst.Location {
     if (scope.code.items.len == 0)
-        return pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .voidType = {} });
+        return pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .voidType = false });
     // declaring all the variables inside the scope
     var newScopeCtx = try ctx.allocator.create(ScopeContext);
     newScopeCtx.vars = try VarPos.clone(scopeCtx.vars);
@@ -426,6 +437,10 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
     const init_stack_size = scopeCtx.simstack.items.len;
     defer newScopeCtx.simstack.deinit();
 
+    // We can reserve some place on the stack
+    // for all the variables declared in this scope
+    // so it's easyer to free everything at the end, plus
+    // we can know at all time where they are
     var it = scope.ctx.variables.iterator();
     var allocsize: i64 = @intCast(0);
     while (it.next()) |variable| {
@@ -445,11 +460,18 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
 
     // the first n-1 elements can be discarded if it does not contain any error
     for (scope.code.items[0 .. scope.code.items.len - 1]) |value| {
+        const valtype = getCompileType((try bbcTypes.getTypeOfValue(value, scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
         _ = try generateValue(value, newScopeCtx, ctx);
+        if (valtype.hasError())
+            try ctx.builder.conditionalJump(Inst.Location{ .label = &error_union_label.* }, &error_union_function.*);
     }
 
     try ctx.builder.comment("Return value of scope");
-    const ret = try generateValue(scope.code.items[scope.code.items.len - 1], newScopeCtx, ctx);
+    const ret_type = getCompileType((try bbcTypes.getTypeOfValue(scope.code.getLast(), scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
+    const ret = try generateValue(scope.code.getLast(), newScopeCtx, ctx);
+    std.debug.print("ret_type {s}\n", .{(try bbcTypes.getTypeOfValue(scope.code.getLast(), scopeCtx.context, ctx.allocator)).toString(ctx.allocator)});
+    if (ret_type.hasError())
+        try ctx.builder.conditionalJump(Inst.Location{ .label = &error_union_label.* }, &error_union_function.*);
 
     while (newScopeCtx.simstack.items.len - init_stack_size > 0) {
         try ctx.builder.decreaseStack(newScopeCtx.simstack.pop().?);
@@ -460,6 +482,7 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
 pub fn generateFunction(func: *const analyser.functionVersion, function_uid: []const u8, ctx: *Context, baseVarTable: VarPos) !void {
     // declare function (add label)
     try ctx.builder.functionDec(function_uid);
+    try ctx.builder.beginFunction();
 
     const funcdef = ctx.codeContext.functions.get(func.name).?;
 
@@ -476,16 +499,9 @@ pub fn generateFunction(func: *const analyser.functionVersion, function_uid: []c
 
     const return_val = try generateScope(funcdef.code, scopeCtx, ctx);
 
-    // Clearing the stack of arguments, no need to do it if it is already empy
-    while (scopeCtx.simstack.items.len > 0) {
-        try ctx.builder.decreaseStack(scopeCtx.simstack.pop().?);
-    }
+    // We can declare the function's ending , seting rbp, and all
+    try ctx.builder.endFunction();
 
-    // if function is main, then exit with the return value
-    if (std.mem.eql(u8, function_uid, "main"))
-        try ctx.builder.exitWith(return_val);
-
-    //if (!funcdef.return_type.match((try bbcTypes.CreateTypeVoid(ctx.allocator, false)).decided))
     try ctx.builder.returnInst(return_val);
 
     try freeLocation(return_val, scopeCtx, ctx);
@@ -536,6 +552,24 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
         try baseVarTable.put(func.name, Inst.Location{ .label = func.name });
         try generateFunction(&func, f_uid, &ctx, baseVarTable);
     }
+
+    // Building the wrapper to main
+    try ctx.builder.functionDec(&main_function_wrapper_name.*);
+    try ctx.builder.moveInst(Inst.Location{ .label = "main" }, .{ .register = .r0 }, .{ .function = {} });
+    try ctx.builder.funcall(.{ .register = .r0 }, Arraylist(Inst.Location).init(alloc));
+    try ctx.builder.exitWith(Inst.Location{ .register = .r0 });
+
+    // Building the error function callback
+    try ctx.builder.functionDec(&error_union_function.*);
+    try ctx.builder.endFunction(); // the end of all function :,(
+    try ctx.builder.returnInst(Inst.Location{ .void = {} });
+
+    // we can begin the variable section
+    try ctx.builder.beginVariableSection();
+    // content: []const (struct{size:usize, content:[]const u8})
+    var contents_data = Inst.varContentType.init(alloc);
+    try contents_data.append(.{ .content = "0", .size = 8 });
+    try ctx.builder.declareVariable(&error_union_label.*, &contents_data);
 
     return ctx.builder;
 }

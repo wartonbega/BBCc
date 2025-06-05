@@ -51,7 +51,10 @@ fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
             return true;
         },
         .register => {},
-        .label => {},
+        .label => |l| {
+            try writer.print("\tlea r15, {s}\n", .{l});
+            return true;
+        },
         .void => unreachable,
     }
     return false;
@@ -61,12 +64,12 @@ fn dumpLocation(loc: Inst.Location) []const u8 {
     return switch (loc) {
         .register => |_r| reg(_r),
         .stack => "qword [rsp + r15]",
-        .label => |l| l,
+        .label => "qword [r15]",
         .void => unreachable,
     };
 }
 
-pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
+pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !void {
     const file = try std.fs.cwd().createFile(
         "output.asm",
         .{ .read = false, .truncate = true },
@@ -76,13 +79,21 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
     const writer = file.writer();
 
     //_ = try writer.write("%macro LOAD_ADDRESS 2\n\tadrp %1, %2@PAGE\n\tadd  %1, %1, %2@PAGEOFF\n%endmacro\n");
-    _ = try writer.write("default rel\nsection .text align=8\n\tglobal main\n");
+    _ = try writer.print("default rel\nsection .text align=8\n\tglobal {s}\n", .{entry_point});
     for (builder.code.items) |instruction| {
         switch (instruction) {
             //.Plus => |inst| writer.writeAll("\tPlus({}, {})\n"),
             //.Minus => |inst| writer.writeAll("\tMinus({}, {})\n"),
             .Function => |fname| {
                 try writer.print("\n{s}:\n", .{fname});
+            },
+            .BeginFunction => {
+                try writer.print("\tpush rbp\n", .{});
+                try writer.print("\tmov rbp, rsp\n", .{});
+            },
+            .EndFunction => {
+                try writer.print("\tmov rsp, rbp \n", .{});
+                try writer.print("\tpop rbp\n", .{});
             },
             .reserveStack => |inst| {
                 try writer.print("\tadd rsp, {d}\n", .{-inst});
@@ -201,7 +212,9 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                 }
                 try writer.print("\tret\n", .{});
             },
-            .Comment => {},
+            .Comment => |cmt| {
+                try writer.print("\t;; {s}\n", .{cmt});
+            },
             .addImmediate => |adim| {
                 _ = try prepareForLoc(writer, adim.x);
                 try writer.print("\tadd {s}, {d}\n", .{
@@ -229,6 +242,22 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder) !void {
                 _ = try prepareForLoc(writer, funcall.func);
                 try writer.print("\tcall {s}\n", .{dumpLocation(funcall.func)});
             },
+            .beginVariableSection => {
+                try writer.print("\nsection .bss\n", .{});
+            },
+            .declareVariable => |_var| {
+                try writer.print("{s}:\n", .{_var.name});
+                for (_var.content.items) |cont| {
+                    try writer.print("\t{s} 1\n", .{if (cont.size == 8) "resq" else "YEET"});
+                }
+            },
+            .ConditionalJump => |inst| {
+                _ = try prepareForLoc(writer, inst.value);
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(inst.value)});
+                try writer.print("\ttest r15, r15\n", .{});
+                try writer.print("\tjnz {s}\n", .{inst.label});
+            },
+            // Here begins operators
             .Plus => |plus| {
                 _ = try prepareForLoc(writer, plus.x);
                 _ = try prepareForLoc(writer, plus.y);

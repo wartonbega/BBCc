@@ -144,7 +144,13 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
         .varDec => |vardec| {
             if (ctx.variableExist(vardec.name))
                 errors.bbcErrorExit("The variable {s} has already been declared before", .{vardec.name}, "");
-            try ctx.createVariable(vardec.name, rightType);
+            if (rightType.decided.err) {
+                const lhs_type = try allocator.create(ast.Type);
+                lhs_type.* = rightType.decided.*;
+                lhs_type.err = false;
+                try ctx.createVariable(vardec.name, Types.Type{ .decided = lhs_type });
+            } else try ctx.createVariable(vardec.name, rightType); // We can just set it without copying, it's alright
+
         },
         .identifier => |ident| {
             if (!ctx.variableExist(ident))
@@ -159,7 +165,14 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                             // otherwise, error... =)
                             if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, rightType, traits))
                                 errors.bbcErrorExit("Can't infer type '{s}' to '{s}', because it needs to have the following traits:\n {}", .{ rightType.toString(allocator), ident, traits }, "");
-                            try ctx.setVariable(ident, rightType);
+
+                            // The lhs type is the same as the rhs', but without the error union
+                            if (rightType.decided.err) {
+                                const lhs_type = try allocator.create(ast.Type);
+                                lhs_type.* = rightType.decided.*;
+                                lhs_type.err = false;
+                                try ctx.setVariable(ident, Types.Type{ .decided = lhs_type });
+                            } else try ctx.setVariable(ident, rightType); // We can just set it without copying, it's alright
                         },
                     }
                 },

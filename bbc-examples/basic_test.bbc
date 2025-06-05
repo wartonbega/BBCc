@@ -1,12 +1,10 @@
 
-func toto (Int q) Int {
-    q + 1
+func caca (Int x) !Int {
+    68 / x
 }
 
-func caca (Int x) Int {
-    toto(x) + 1
-}
-
-func main () Int {
-    caca(1)
+func main () !Int {
+    let a = caca(1)
+    let b = "toto"
+    0
 }
