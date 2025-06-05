@@ -307,11 +307,18 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 }
                 // x86 division: dividend in rax, divisor in reg/mem, result in rax, remainder in rdx
                 // Move dividend to rax
-                try writer.print("\tmov rax, {s}\n", .{dumpLocation(div.x)});
-                try writer.print("\tcqo\n", .{}); // Sign-extend rax into rdx:rax
-                try writer.print("\tidiv {s}\n", .{dumpLocation(div.y)});
-                // Move result back to destination
-                try writer.print("\tmov {s}, rax\n", .{dumpLocation(div.x)});
+                if (div.x != .register or div.x.register != .r0)
+                    try writer.print("\tpush rax\n", .{});
+                try writer.print("\tpush rdx\n", .{});
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(div.y)});
+                if (div.x != .register or div.x.register != .r0)
+                    try writer.print("\tmov rax, {s}\n", .{dumpLocation(div.x)});
+                try writer.print("\tcqo\n", .{});
+                try writer.print("\tidiv r15\n", .{});
+                try writer.print("\tmov {s}, rax\n", .{dumpLocation(div.x)}); // res <- rax, because it is in rax
+                try writer.print("\tpop rdx\n", .{});
+                if (div.x != .register or div.x.register != .r0)
+                    try writer.print("\tpop rax\n", .{});
             },
             .Modulo => |mod| {
                 _ = try prepareForLoc(writer, mod.x);
@@ -319,10 +326,20 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (mod.x == .stack and mod.y == .stack) {
                     return error.UnsupportedBothStackValues;
                 }
-                try writer.print("\tmov rax, {s}\n", .{dumpLocation(mod.x)});
+                // x86 division: dividend in rax, divisor in reg/mem, result in rax, remainder in rdx
+                // Move dividend to rax
+                if (mod.x != .register or mod.x.register != .r0)
+                    try writer.print("\tpush rax\n", .{});
+                try writer.print("\tpush rdx\n", .{});
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(mod.y)});
+                if (mod.x != .register or mod.x.register != .r0)
+                    try writer.print("\tmov rax, {s}\n", .{dumpLocation(mod.x)});
                 try writer.print("\tcqo\n", .{});
-                try writer.print("\tidiv {s}\n", .{dumpLocation(mod.y)});
+                try writer.print("\tidiv r15\n", .{});
                 try writer.print("\tmov {s}, rdx\n", .{dumpLocation(mod.x)});
+                try writer.print("\tpop rdx\n", .{});
+                if (mod.x != .register or mod.x.register != .r0)
+                    try writer.print("\tpop rax\n", .{});
             },
             .Equal => |eq| {
                 _ = try prepareForLoc(writer, eq.x);

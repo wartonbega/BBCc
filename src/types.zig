@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const analyser = @import("analyser.zig");
 const errors = @import("errors.zig");
-const traits = @import("traits.zig");
+const Traits = @import("traits.zig");
 
 const Context = analyser.Context;
 
@@ -12,7 +12,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Type = union(enum) {
     decided: *ast.Type,
-    undecided: ArrayList(traits.Trait),
+    undecided: ArrayList(Traits.Trait),
 
     pub fn init(t: *ast.Type) Type {
         return Type{ .decided = t };
@@ -82,6 +82,13 @@ pub fn CreateTypeVoid(allocator: Allocator, err: bool) !Type {
     return Type{ .decided = _type };
 }
 
+pub fn duplicateWithErrorUnion(allocator: Allocator, base: *const ast.Type, err: bool) !Type {
+    const _type = try allocator.create(ast.Type);
+    _type.* = base.*;
+    _type.err = err;
+    return Type{ .decided = _type };
+}
+
 ///////////////////////////////////////////////////
 ///                                             ///
 ///////////////////////////////////////////////////
@@ -111,6 +118,17 @@ pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Conte
     return func_version;
 }
 
+pub fn getTypeOfScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) std.mem.Allocator.Error!Type {
+    _ = ctx;
+    if (scope.code.items.len > 0) {
+        for (scope.code.items[0 .. scope.code.items.len - 1]) |value| {
+            _ = try getTypeOfValue(value, scope.ctx, allocator);
+        }
+        return try getTypeOfValue(scope.code.getLast(), scope.ctx, allocator);
+    }
+    return CreateTypeVoid(allocator, false);
+}
+
 pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.mem.Allocator.Error!Type {
     return switch (value.*) {
         .intLit => try CreateTypeInt(allocator, false),
@@ -129,9 +147,9 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
                 return Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident), allocator) };
             if (ctx.variableExist(ident))
                 break :blk ctx.getVariable(ident);
-            break :blk Type{ .undecided = ArrayList(traits.Trait).init(allocator) };
+            break :blk Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
         },
-        .scope => try analyser.analyseScope(value.scope, ctx, allocator),
+        .scope => try getTypeOfScope(value.scope, ctx, allocator),
         .funcall => |func| blk: {
             // We have to borrow a the majority of the code from analyse.analysefuncall,
             // because it's slightly different here
@@ -158,32 +176,29 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
                     }
                 },
             }
-            break :blk Type{ .undecided = ArrayList(traits.Trait).init(allocator) };
+            break :blk Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
         },
-        .binaryOperator => |binop| analyser.analyseBinOp(
+        .binaryOperator => |binop| analyser.analyseBinOp( // it returns only the return type given the two operands types
             binop.operator,
             ctx,
             try getTypeOfValue(binop.rhs, ctx, allocator),
             try getTypeOfValue(binop.lhs, ctx, allocator),
             allocator,
         ),
+        // For an if statement, the type is
         .If => |ifstmt| blk: {
-            const base_scope_type = try analyser.analyseScope(ifstmt.scopes.getLast(), ctx, allocator);
-            const bool_type = try CreateTypeBool(allocator, false);
-            for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
-                const scope_type = try analyser.analyseScope(scope, ctx, allocator);
-                const cond_type = try analyser.analyseValue(cond, ctx, allocator);
-                if (!scope_type.matchType(base_scope_type))
-                    errors.bbcErrorExit("The type of this scope don't match the return type of the if statement", .{}, "");
-                if (!cond_type.matchType(bool_type))
-                    errors.bbcErrorExit("The type of this condition does not match 'Bool'", .{}, "");
+            var has_error = false;
+            for (ifstmt.scopes.items) |scope| {
+                if ((try getTypeOfValue(scope, ctx, allocator)).decided.err) {
+                    has_error = true;
+                    break; // no need to go further
+                }
             }
             if (ifstmt.elsescope) |else_scope| {
-                const else_type = try analyser.analyseScope(else_scope, ctx, allocator);
-                if (!else_type.matchType(base_scope_type))
-                    errors.bbcErrorExit("The type of the else scope don't match the type of this if statement", .{}, "");
+                if ((try getTypeOfValue(else_scope, ctx, allocator)).decided.err)
+                    has_error = true;
             }
-            break :blk base_scope_type;
+            break :blk duplicateWithErrorUnion(allocator, (try getTypeOfValue(ifstmt.scopes.items[0], ctx, allocator)).decided, has_error);
         },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
@@ -248,12 +263,12 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
 pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast.binOperator, ctx: *Context, allocator: Allocator, expType: Type) std.mem.Allocator.Error!void {
     // This function infers the types for a binary operator/function call, given the expected type.
     // It is inspired by analyseBinOp, but adapted for inferring types for lhsValue and rhsValue.
-    const op_trait = traits.traitFromOperator(op);
+    const op_trait = Traits.traitFromOperator(op);
     const lhsType = try getTypeOfValue(lhsValue, ctx, allocator);
     const rhsType = try getTypeOfValue(rhsValue, ctx, allocator);
     _ = expType;
     // Check if lhsType implements the required trait for the operator.
-    if (!traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, lhsType, op_trait))
+    if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, lhsType, op_trait))
         errors.bbcErrorExit("Can't use operator '{s}' on type '{s}', because it does not implement the right trait", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
 
     switch (lhsType) {
@@ -287,7 +302,7 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                         if (func.signature.argtypes.items.len != 1)
                             errors.bbcErrorExit("The function {s} does not have enough arguments", .{func.name}, "");
                         const arg_type = func.signature.argtypes.items[0];
-                        if (traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, Type{ .decided = arg_type }, rhs_traits))
+                        if (Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, Type{ .decided = arg_type }, rhs_traits))
                             try found_matching_funcs.append(func);
                     }
                     if (found_matching_funcs.items.len == 0)
@@ -318,7 +333,7 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                 defer if (!implements_all) allocator.destroy(tttype);
 
                 for (traits_list.items) |required_trait| {
-                    if (!traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, Type{ .decided = tttype }, required_trait)) {
+                    if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, Type{ .decided = tttype }, required_trait)) {
                         implements_all = false;
                         break;
                     }
@@ -357,7 +372,7 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                             const arg_type = func.signature.argtypes.items[0];
                             var all_traits_match = true;
                             for (rhs_traits.items) |required_trait| {
-                                if (!traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, Type{ .decided = arg_type }, required_trait)) {
+                                if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, Type{ .decided = arg_type }, required_trait)) {
                                     all_traits_match = false;
                                     break;
                                 }
@@ -401,17 +416,24 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             }
         },
         .identifier => |ident| {
+            // identifiers and variables don't support error union
+            const real_exp_type = if (expType.decided.err) blk: {
+                const rhs_type = try allocator.create(ast.Type);
+                rhs_type.* = expType.decided.*;
+                rhs_type.err = false;
+                break :blk Type{ .decided = rhs_type };
+            } else expType; // We can just set it without copying, it's alright
             if (ctx.functionExist(ident)) {
                 const f_type = Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident), allocator) };
-                if (!f_type.matchType(expType))
-                    errors.bbcErrorExit("The expected type {s} does not match the type of '{s}': {s}", .{ expType.toString(allocator), ident, ctx.getVariable(ident).toString(allocator) }, "");
+                if (!f_type.matchType(real_exp_type))
+                    errors.bbcErrorExit("The expected type {s} does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident, ctx.getVariable(ident).toString(allocator) }, "");
                 return;
             }
             if (!ctx.variableExist(ident))
                 errors.bbcErrorExit("The variable {s} is not declared (infer)", .{ident}, "");
-            if (!ctx.getVariable(ident).matchType(expType))
-                errors.bbcErrorExit("The expected type {s}  does not match the type of '{s}': {s}", .{ expType.toString(allocator), ident, ctx.getVariable(ident).toString(allocator) }, "");
-            try ctx.setVariable(ident, expType);
+            if (!ctx.getVariable(ident).matchType(real_exp_type))
+                errors.bbcErrorExit("The expected type {s}  does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident, ctx.getVariable(ident).toString(allocator) }, "");
+            try ctx.setVariable(ident, real_exp_type);
         },
         .assignement => |assign| {
             const rhsType = try getTypeOfValue(assign.rhs, ctx, allocator);
@@ -429,18 +451,19 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 };
             switch (rhsType) {
                 .decided => {
+                    const real_right_type = if (rhsType.decided.err) blk: {
+                        const rhs_type = try allocator.create(ast.Type);
+                        rhs_type.* = rhsType.decided.*;
+                        rhs_type.err = false;
+                        break :blk Type{ .decided = rhs_type };
+                    } else rhsType; // We can just set it without copying, it's alright
                     switch (lhsType) {
                         .decided => {
-                            if (!rhsType.matchType(lhsType))
-                                errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's {s}", .{ rhsType.toString(allocator), lhsType.toString(allocator) }, "");
+                            if (!real_right_type.matchType(lhsType))
+                                errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's {s}", .{ real_right_type.toString(allocator), lhsType.toString(allocator) }, "");
                         },
                         .undecided => {
-                            if (rhsType.decided.err) {
-                                const lhs_type = try allocator.create(ast.Type);
-                                lhs_type.* = rhsType.decided.*;
-                                lhs_type.err = false;
-                                try inferTypeValue(assign.lhs, ctx, allocator, Type{ .decided = lhs_type });
-                            } else try inferTypeValue(assign.lhs, ctx, allocator, rhsType);
+                            try inferTypeValue(assign.lhs, ctx, allocator, real_right_type);
                         },
                     }
                     try inferTypeValue(assign.rhs, ctx, allocator, rhsType);
@@ -478,11 +501,11 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .If => |ifstmt| {
             const bool_type = try CreateTypeBool(allocator, false);
             for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
-                try inferTypeScope(scope, ctx, allocator, expType);
+                try inferTypeValue(scope, ctx, allocator, expType);
                 try inferTypeValue(cond, ctx, allocator, bool_type);
             }
             if (ifstmt.elsescope) |else_scope|
-                try inferTypeScope(else_scope, ctx, allocator, expType);
+                try inferTypeValue(else_scope, ctx, allocator, expType);
         },
         else => {
             std.debug.print("Unimplemented {}\n", .{value});

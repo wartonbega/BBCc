@@ -266,32 +266,6 @@ pub fn traitUnion(map1: *std.hash_map.StringHashMap(ArrayList(Trait)), map2: *co
     }
 }
 
-fn getTypeLeafes(value: *ast.Value, ctx: *analyser.Context, allocator: std.mem.Allocator) !Types.Type {
-    return switch (value.*) {
-        .intLit => try Types.CreateTypeInt(allocator, false),
-        .stringLit => try Types.CreateTypeString(allocator, false),
-        .charLit => try Types.CreateTypeChar(allocator, false),
-        .varDec => Types.Type{ .undecided = ArrayList(Trait).init(allocator) },
-        .assignement => try Types.CreateTypeVoid(allocator, false), // [TODO]: change wether it is !Void, if the right hand side can return an error
-        .parenthesis => try getTypeLeafes(value.parenthesis, ctx, allocator),
-        .identifier => |ident| blk: {
-            if (ctx.variableExist(ident))
-                break :blk ctx.getVariable(ident);
-            break :blk Types.Type{ .undecided = ArrayList(Trait).init(allocator) };
-        },
-        .scope => |scope| try getTypeLeafes(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator),
-        .funcall => |func| blk: {
-            const ret = try analyser.analyseFuncall(func, ctx, allocator);
-            break :blk ret;
-        },
-        .binaryOperator => Types.Type{ .undecided = ArrayList(Trait).init(allocator) },
-        else => {
-            std.debug.print("Unimplemented {}", .{value.*});
-            unreachable;
-        },
-    };
-}
-
 pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allocator: std.mem.Allocator) !std.hash_map.StringHashMap(ArrayList(Trait)) {
     // Return all the traits associated with each types in the scope
     var ret = std.hash_map.StringHashMap(ArrayList(Trait)).init(allocator);
@@ -322,7 +296,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
         .binaryOperator => |binop| {
             try traitUnion(&ret, &try getTypeTraits(binop.lhs, ctx, allocator));
             try traitUnion(&ret, &try getTypeTraits(binop.rhs, ctx, allocator));
-            const lhs_type = try analyser.analyseValue(binop.lhs, ctx, allocator);
+            const lhs_type = try Types.getTypeOfValue(binop.lhs, ctx, allocator);
             switch (lhs_type) {
                 .decided => |_type| {
                     switch (_type.base) {
@@ -340,10 +314,10 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
         .If => |ifstmt| {
             for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
                 try traitUnion(&ret, &try getTypeTraits(cond, ctx, allocator));
-                try traitUnion(&ret, &try getTypeTraits(&ast.Value{ .scope = scope }, ctx, allocator));
+                try traitUnion(&ret, &try getTypeTraits(scope, ctx, allocator));
             }
             if (ifstmt.elsescope) |else_scope| {
-                try traitUnion(&ret, &try getTypeTraits(&ast.Value{ .scope = else_scope }, ctx, allocator));
+                try traitUnion(&ret, &try getTypeTraits(else_scope, ctx, allocator));
             }
         },
         else => {

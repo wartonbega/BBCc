@@ -144,12 +144,8 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
         .varDec => |vardec| {
             if (ctx.variableExist(vardec.name))
                 errors.bbcErrorExit("The variable {s} has already been declared before", .{vardec.name}, "");
-            if (rightType.decided.err) {
-                const lhs_type = try allocator.create(ast.Type);
-                lhs_type.* = rightType.decided.*;
-                lhs_type.err = false;
-                try ctx.createVariable(vardec.name, Types.Type{ .decided = lhs_type });
-            } else try ctx.createVariable(vardec.name, rightType); // We can just set it without copying, it's alright
+            const lhs_type = try Types.duplicateWithErrorUnion(allocator, rightType.decided, false);
+            try ctx.createVariable(vardec.name, lhs_type);
         },
         .identifier => |ident| {
             if (!ctx.variableExist(ident))
@@ -157,21 +153,17 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
             switch (rightType) {
                 .decided => {
                     const t = ctx.getVariable(ident);
+                    const real_right_type = try Types.duplicateWithErrorUnion(allocator, rightType.decided, false);
                     switch (t) {
-                        .decided => if (!rightType.matchType(t)) errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's ({s})", .{ rightType.toString(allocator), t.toString(allocator) }, ""),
+                        .decided => if (!real_right_type.matchType(t)) errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's ({s})", .{ rightType.toString(allocator), t.toString(allocator) }, ""),
                         .undecided => |traits| {
                             // If the types matches all the traits inherited in the undecided type, then we can assign
                             // otherwise, error... =)
-                            if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, rightType, traits))
-                                errors.bbcErrorExit("Can't infer type '{s}' to '{s}', because it needs to have the following traits:\n {}", .{ rightType.toString(allocator), ident, traits }, "");
+                            if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, real_right_type, traits))
+                                errors.bbcErrorExit("Can't infer type '{s}' to '{s}', because it needs to have the following traits:\n {}", .{ real_right_type.toString(allocator), ident, traits }, "");
 
                             // The lhs type is the same as the rhs', but without the error union
-                            if (rightType.decided.err) {
-                                const lhs_type = try allocator.create(ast.Type);
-                                lhs_type.* = rightType.decided.*;
-                                lhs_type.err = false;
-                                try ctx.setVariable(ident, Types.Type{ .decided = lhs_type });
-                            } else try ctx.setVariable(ident, rightType); // We can just set it without copying, it's alright
+                            try ctx.setVariable(ident, real_right_type); // We can just set it without copying, it's alright
                         },
                     }
                 },
@@ -323,20 +315,34 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         .If => |ifstmt| {
             // the number of scopes and conditions is the same (trust me hehe) and greater than 0
             // All scopes should evaluate to the same type: the type of the first scope
-            const base_scope_type = try analyseScope(ifstmt.scopes.getLast(), ctx, allocator);
+            const base_scope_type = try analyseValue(ifstmt.scopes.getLast(), ctx, allocator);
+            if (base_scope_type == .undecided)
+                return base_scope_type;
+            var has_error = base_scope_type.decided.err;
+
             const bool_type = try Types.CreateTypeBool(allocator, false);
             for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
-                const scope_type = try analyseScope(scope, ctx, allocator);
-                const cond_type = try analyseValue(cond, ctx, allocator);
-                if (!scope_type.matchType(base_scope_type))
+                // First analysing the scope
+                const scope_type = try analyseValue(scope, ctx, allocator);
+                if (scope_type == .undecided)
+                    return base_scope_type;
+                if (scope_type.decided.err) has_error = true;
+                const real_scope_type = try Types.duplicateWithErrorUnion(allocator, scope_type.decided, base_scope_type.decided.err);
+                if (!real_scope_type.matchType(base_scope_type))
                     errors.bbcErrorExit("The type of this scope don't match the return type of the if statement", .{}, "");
+                // Then the condition
+                const cond_type = try analyseValue(cond, ctx, allocator);
                 if (!cond_type.matchType(bool_type))
                     errors.bbcErrorExit("The type of this condition does not match 'Bool'", .{}, "");
             }
             if (ifstmt.elsescope) |else_scope| {
-                const else_type = try analyseScope(else_scope, ctx, allocator);
-                if (!else_type.matchType(base_scope_type))
-                    errors.bbcErrorExit("The type of the else scope don't match the type of this if statement", .{}, "");
+                const else_type = try analyseValue(else_scope, ctx, allocator);
+                if (else_type == .undecided)
+                    return base_scope_type;
+                if (else_type.decided.err) has_error = true;
+                const real_else_type = try Types.duplicateWithErrorUnion(allocator, else_type.decided, base_scope_type.decided.err);
+                if (!real_else_type.matchType(base_scope_type))
+                    errors.bbcErrorExit("The type of the else '{s}' scope don't match the type of this if statement", .{else_type.toString(allocator)}, "");
             }
             return base_scope_type;
         },

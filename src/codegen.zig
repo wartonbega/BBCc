@@ -284,6 +284,15 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
 }
 
 pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Context) Allocator.Error!Inst.Location {
+    defer {
+        var defer_err_type = Ast.Type{ .base = Ast.TypeBase{ .name = "Int" }, .err = false, .references = 0 };
+        const eval_type = bbcTypes.getTypeOfValue(@constCast(value), scopeCtx.context, ctx.allocator) catch blk: {
+            break :blk bbcTypes.Type{ .decided = &defer_err_type };
+        };
+        const comp_type = getCompileType(eval_type.decided, scopeCtx.version);
+        if (comp_type.hasError())
+            ctx.builder.conditionalJump(Inst.Location{ .label = &error_union_label.* }, &error_union_function.*) catch {};
+    }
     switch (value.*) {
         .intLit => |intlit| {
             const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
@@ -327,7 +336,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             // creating the local version
             var func_version = std.hash_map.StringHashMap(bbcTypes.Type).init(ctx.allocator);
             for (funcall.args.items, functype.argtypes.items) |a, b| {
-                const argtype = try analyser.analyseValue(a, scopeCtx.context, ctx.allocator);
+                const argtype = try bbcTypes.getTypeOfValue(a, scopeCtx.context, ctx.allocator);
                 // If there's a type alias, then we get to assign it
                 if (analyser.typeparamContains(functype.typeparam, b.base.name)) {
                     try func_version.put(b.base.name, argtype);
@@ -431,7 +440,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
         },
         .If => |ifstmt| {
             const end_label = try ctx.generateLabel("end_if");
-            const compile_type = getCompileType((try analyser.analyseScope(ifstmt.scopes.items[0], scopeCtx.context, ctx.allocator)).decided, scopeCtx.version);
+            const compile_type = getCompileType((try bbcTypes.getTypeOfValue(ifstmt.scopes.items[0], scopeCtx.context, ctx.allocator)).decided, scopeCtx.version);
             const ret_loc = try pickWiselyLocation(ctx, scopeCtx, compile_type);
 
             // We can generate each scope one by one
@@ -440,7 +449,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 const _test = try generateValue(cond, scopeCtx, ctx);
                 try ctx.builder.not(_test);
                 try ctx.builder.conditionalJump(_test, next_label);
-                const scope_ret_loc = try generateScope(scope, scopeCtx, ctx);
+                const scope_ret_loc = try generateValue(scope, scopeCtx, ctx);
                 if (compile_type != .voidType)
                     try ctx.builder.moveInst(scope_ret_loc, ret_loc, compile_type);
                 try ctx.builder.jump(end_label);
@@ -449,7 +458,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
 
             // Then if it exists, the else statement
             if (ifstmt.elsescope) |else_scope| {
-                const else_scope_ret_loc = try generateScope(else_scope, scopeCtx, ctx);
+                const else_scope_ret_loc = try generateValue(else_scope, scopeCtx, ctx);
                 if (compile_type != .voidType)
                     try ctx.builder.moveInst(else_scope_ret_loc, ret_loc, compile_type);
             }
@@ -498,17 +507,13 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
 
     // the first n-1 elements can be discarded if it does not contain any error
     for (scope.code.items[0 .. scope.code.items.len - 1]) |value| {
-        const valtype = getCompileType((try bbcTypes.getTypeOfValue(value, scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
+        //  const valtype = getCompileType((try bbcTypes.getTypeOfValue(value, scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
         _ = try generateValue(value, newScopeCtx, ctx);
-        if (valtype.hasError())
-            try ctx.builder.conditionalJump(Inst.Location{ .label = &error_union_label.* }, &error_union_function.*);
     }
 
     try ctx.builder.comment("Return value of scope");
-    const ret_type = getCompileType((try bbcTypes.getTypeOfValue(scope.code.getLast(), scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
+    //const ret_type = getCompileType((try bbcTypes.getTypeOfValue(scope.code.getLast(), scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
     const ret = try generateValue(scope.code.getLast(), newScopeCtx, ctx);
-    if (ret_type.hasError())
-        try ctx.builder.conditionalJump(Inst.Location{ .label = &error_union_label.* }, &error_union_function.*);
 
     while (newScopeCtx.simstack.items.len - init_stack_size > 0) {
         try ctx.builder.decreaseStack(newScopeCtx.simstack.pop().?);

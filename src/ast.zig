@@ -186,8 +186,8 @@ pub const UnaryOperatorRight = struct { operator: RightUnaryOperators, expr: *Va
 // finally the else statement is in elsescope
 pub const IfStmt = struct {
     conditions: ArrayList(*Value),
-    scopes: ArrayList(*Scope),
-    elsescope: ?*Scope,
+    scopes: ArrayList(*Value), // The different 'scopes'
+    elsescope: ?*Value,
 };
 
 pub const VarDeclaration = struct {

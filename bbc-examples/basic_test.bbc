@@ -1,12 +1,9 @@
 
 func toto (Int x) !Int {
-    let b
-    if 1 == x {
-        b = 1
-        let a = "toto"
-    } else {
-        b = 2
-    }
+    let b = if 1 == x 
+        69
+    else
+        42   
     b
 }
 
