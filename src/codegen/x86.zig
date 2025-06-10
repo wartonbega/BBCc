@@ -6,24 +6,49 @@ const Allocator = std.mem.Allocator;
 
 const FileWriter = std.io.Writer(std.fs.File, std.fs.File.WriteError, std.fs.File.write);
 
-pub fn reg(r: Inst.Registers) []const u8 {
+pub fn reg(r: Inst.Registers, size: i64) []const u8 {
+    if (size == 8) {
+        return switch (r) {
+            .r0 => "rax",
+            .r1 => "rbx",
+            .r2 => "rcx",
+            .r3 => "rdx",
+            .r4 => "rsi",
+            .r5 => "rdi",
+            .r6 => "r8",
+            .r7 => "r9",
+            .r8 => "r10",
+            .r9 => "r11",
+            .r10 => "r12",
+            .r11 => "r13",
+            .r12 => "r14",
+            else => unreachable,
+        };
+    }
     return switch (r) {
-        .r0 => "rax",
-        .r1 => "rbx",
-        .r2 => "rcx",
-        .r3 => "rdx",
-        .r4 => "rsi",
-        .r5 => "rdi",
-        .r6 => "rsp",
-        .r7 => "rbp",
-        .r8 => "r8",
-        .r9 => "r9",
-        .r10 => "r10",
-        .r11 => "r11",
-        .r12 => "r12",
-        .r13 => "r13",
-        .r14 => "r14",
+        .r0 => "al",
+        .r1 => "bl",
+        .r2 => "cl",
+        .r3 => "dl",
+        .r4 => "sil",
+        .r5 => "dil",
+        .r6 => "r8b",
+        .r7 => "r9b",
+        .r8 => "r10b",
+        .r9 => "r11b",
+        .r10 => "r12b",
+        .r11 => "r13b",
+        .r12 => "r14b",
+        else => unreachable,
     };
+}
+
+fn getWordSize(size: i64) []const u8 {
+    if (size == 8)
+        return "qword";
+    if (size == 1)
+        return "byte";
+    unreachable;
 }
 
 const isAlloced = Inst.isAlloced;
@@ -34,7 +59,7 @@ fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
             var size_accumulator: i64 = @intCast(0);
             try writer.print("\txor r15, r15\n", .{});
             for (d.idx..d.stack_state.items.len) |i| {
-                const ttype = d.stack_state.items[d.stack_state.items.len - i];
+                const ttype = d.stack_state.items[d.stack_state.items.len - (i - d.idx) - 1];
                 if (isAlloced(ttype)) {
                     if (size_accumulator != 0)
                         try writer.print("\tadd r15, {d}\n", .{size_accumulator});
@@ -60,9 +85,9 @@ fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
     return false;
 }
 
-fn dumpLocation(loc: Inst.Location) []const u8 {
+fn dumpLocation(loc: Inst.Location, size: i64) []const u8 {
     return switch (loc) {
-        .register => |_r| reg(_r),
+        .register => |_r| reg(_r, size),
         .stack => "qword [rsp + r15]",
         .label => "qword [r15]",
         .void => unreachable,
@@ -100,7 +125,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
             },
             .Move => |inst| {
                 if (inst.to == .register and inst.from == .label) {
-                    try writer.print("\tlea {s}, {s}\n", .{ reg(inst.to.register), inst.from.label });
+                    try writer.print("\tlea {s}, {s}\n", .{ reg(inst.to.register, 8), inst.from.label });
                 } else if (inst.to == .stack and inst.from == .label) {
                     try writer.print("\tpush rdx\n", .{});
                     try writer.print("\tlea rdx, {s}\n", .{inst.from.label});
@@ -115,10 +140,18 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                         return error.UnsupportedBothStackValues;
                     }
                     try writer.print("\tmov {s}, {s}\n", .{
-                        dumpLocation(inst.to),
-                        dumpLocation(inst.from),
+                        dumpLocation(inst.to, Inst.getCompileSize(inst._type)),
+                        dumpLocation(inst.from, Inst.getCompileSize(inst._type)),
                     });
                 }
+            },
+            .Load => |inst| {
+                _ = try prepareForLoc(writer, inst.to);
+                _ = try prepareForLoc(writer, inst.from);
+                try writer.print("\tmov {s}, {s}\n", .{
+                    dumpLocation(inst.to, 8),
+                    dumpLocation(inst.from, 8),
+                });
             },
             .loadAddress => |inst| {
                 const pop_ra = try prepareForLoc(writer, inst.to);
@@ -130,13 +163,13 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (pop_ra or pop_rb)
                     try writer.print("\tpop r15\n", .{});
 
-                try writer.print("\tlea {s}, [{s}]\n", .{ dumpLocation(inst.to), dumpLocation(inst.from) });
+                try writer.print("\tlea {s}, [{s}]\n", .{ dumpLocation(inst.to, 8), dumpLocation(inst.from, 8) });
             },
             .IntLit => |inst| {
                 _ = try prepareForLoc(writer, inst.to);
 
                 try writer.print("\tmov {s}, {d}\n", .{
-                    dumpLocation(inst.to),
+                    dumpLocation(inst.to, 8),
                     inst.val,
                 });
             },
@@ -144,18 +177,18 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 _ = try prepareForLoc(writer, inst.to);
 
                 try writer.print("\tmov {s}, {d}\n", .{
-                    dumpLocation(inst.to),
+                    dumpLocation(inst.to, 8),
                     inst.val,
                 });
             },
             .writeArrayElement => |inst| {
                 _ = try prepareForLoc(writer, inst.arr);
-                try writer.print("\tmov r15, {s}\n", .{dumpLocation(inst.arr)});
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(inst.arr, 8)});
                 const mult = Inst.getCompileSize(inst._type);
                 // Fat pointer so add 8 to the index
                 const decal: i64 = @intCast(inst.idx);
                 try writer.print("\tlea r15, [r15 + {d}]\n", .{mult * decal + 8});
-                try writer.print("\tmov qword [r15], {s}\n", .{dumpLocation(inst.value)}); // TODO: change qword by the wright size
+                try writer.print("\tmov {s} [r15], {s}\n", .{ getWordSize(Inst.getCompileSize(inst._type)), dumpLocation(inst.value, Inst.getCompileSize(inst._type)) }); // TODO: change qword by the wright size
             },
             .decreaseStack => |t| {
                 // Removes what is on top of the stack (trusting that it is the wright type)
@@ -170,7 +203,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 _ = try prepareForLoc(writer, inst);
 
                 try writer.print("\tmov rdi, {s}\n", .{
-                    dumpLocation(inst),
+                    dumpLocation(inst, 8),
                 });
 
                 // No need to save registers because we are exiting (bye bye)
@@ -188,7 +221,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 _ = try prepareForLoc(writer, inst);
 
                 // Moving into r15 for facilitating manipulation
-                try writer.print("\tmov r15, {s}\n", .{dumpLocation(inst)});
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(inst, 8)});
 
                 try writer.print("\tmov rdi, 1\n", .{});
                 try writer.print("\tmov rsi, r15\n", .{});
@@ -207,7 +240,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (ret != .void) {
                     _ = try prepareForLoc(writer, ret);
                     try writer.print("\tmov rax, {s}\n", .{
-                        dumpLocation(ret),
+                        dumpLocation(ret, 8),
                     });
                 }
                 try writer.print("\tret\n", .{});
@@ -218,29 +251,29 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
             .addImmediate => |adim| {
                 _ = try prepareForLoc(writer, adim.x);
                 try writer.print("\tadd {s}, {d}\n", .{
-                    dumpLocation(adim.x),
+                    dumpLocation(adim.x, 8),
                     adim.y,
                 });
             },
             .getBasePointer => |loc| {
                 _ = try prepareForLoc(writer, loc);
                 try writer.print("\tmov {s}, rbp\n", .{
-                    dumpLocation(loc),
+                    dumpLocation(loc, 8),
                 });
             },
             .getStackPointer => |loc| {
                 _ = try prepareForLoc(writer, loc);
                 try writer.print("\tmov {s}, rsp\n", .{
-                    dumpLocation(loc),
+                    dumpLocation(loc, 8),
                 });
             },
             .Funcall => |funcall| {
                 for (funcall.args.items, Inst.RegIter[0..funcall.args.items.len]) |arg, destreg| {
                     _ = try prepareForLoc(writer, arg);
-                    try writer.print("\tmov {s}, {s}\n", .{ reg(destreg), dumpLocation(arg) });
+                    try writer.print("\tmov {s}, {s}\n", .{ reg(destreg, 8), dumpLocation(arg, 8) });
                 }
                 _ = try prepareForLoc(writer, funcall.func);
-                try writer.print("\tcall {s}\n", .{dumpLocation(funcall.func)});
+                try writer.print("\tcall {s}\n", .{dumpLocation(funcall.func, 8)});
             },
             .beginVariableSection => {
                 try writer.print("\nsection .bss\n", .{});
@@ -253,7 +286,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
             },
             .ConditionalJump => |inst| {
                 _ = try prepareForLoc(writer, inst.value);
-                try writer.print("\tmov r15, {s}\n", .{dumpLocation(inst.value)});
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(inst.value, 8)});
                 try writer.print("\ttest r15, r15\n", .{});
                 try writer.print("\tjnz {s}\n", .{inst.label});
             },
@@ -274,7 +307,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
 
                 try writer.print(
                     "\tadd {s}, {s}\n",
-                    .{ dumpLocation(plus.x), dumpLocation(plus.y) },
+                    .{ dumpLocation(plus.x, 8), dumpLocation(plus.y, 8) },
                 );
             },
             .Minus => |minus| {
@@ -285,7 +318,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 }
                 try writer.print(
                     "\tsub {s}, {s}\n",
-                    .{ dumpLocation(minus.x), dumpLocation(minus.y) },
+                    .{ dumpLocation(minus.x, 8), dumpLocation(minus.y, 8) },
                 );
             },
             .Multiply => |mul| {
@@ -296,7 +329,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 }
                 try writer.print(
                     "\timul {s}, {s}\n",
-                    .{ dumpLocation(mul.x), dumpLocation(mul.y) },
+                    .{ dumpLocation(mul.x, 8), dumpLocation(mul.y, 8) },
                 );
             },
             .Divide => |div| {
@@ -310,12 +343,12 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (div.x != .register or div.x.register != .r0)
                     try writer.print("\tpush rax\n", .{});
                 try writer.print("\tpush rdx\n", .{});
-                try writer.print("\tmov r15, {s}\n", .{dumpLocation(div.y)});
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(div.y, 8)});
                 if (div.x != .register or div.x.register != .r0)
-                    try writer.print("\tmov rax, {s}\n", .{dumpLocation(div.x)});
+                    try writer.print("\tmov rax, {s}\n", .{dumpLocation(div.x, 8)});
                 try writer.print("\tcqo\n", .{});
                 try writer.print("\tidiv r15\n", .{});
-                try writer.print("\tmov {s}, rax\n", .{dumpLocation(div.x)}); // res <- rax, because it is in rax
+                try writer.print("\tmov {s}, rax\n", .{dumpLocation(div.x, 8)}); // res <- rax, because it is in rax
                 try writer.print("\tpop rdx\n", .{});
                 if (div.x != .register or div.x.register != .r0)
                     try writer.print("\tpop rax\n", .{});
@@ -331,12 +364,12 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (mod.x != .register or mod.x.register != .r0)
                     try writer.print("\tpush rax\n", .{});
                 try writer.print("\tpush rdx\n", .{});
-                try writer.print("\tmov r15, {s}\n", .{dumpLocation(mod.y)});
+                try writer.print("\tmov r15, {s}\n", .{dumpLocation(mod.y, 8)});
                 if (mod.x != .register or mod.x.register != .r0)
-                    try writer.print("\tmov rax, {s}\n", .{dumpLocation(mod.x)});
+                    try writer.print("\tmov rax, {s}\n", .{dumpLocation(mod.x, 8)});
                 try writer.print("\tcqo\n", .{});
                 try writer.print("\tidiv r15\n", .{});
-                try writer.print("\tmov {s}, rdx\n", .{dumpLocation(mod.x)});
+                try writer.print("\tmov {s}, rdx\n", .{dumpLocation(mod.x, 8)});
                 try writer.print("\tpop rdx\n", .{});
                 if (mod.x != .register or mod.x.register != .r0)
                     try writer.print("\tpop rax\n", .{});
@@ -347,9 +380,9 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (eq.x == .stack and eq.y == .stack) {
                     return error.UnsupportedBothStackValues;
                 }
-                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(eq.x), dumpLocation(eq.y) });
+                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(eq.x, 8), dumpLocation(eq.y, 8) });
                 try writer.print("\tsete al\n", .{});
-                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(eq.x)});
+                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(eq.x, 8)});
             },
             .NotEqual => |neq| {
                 _ = try prepareForLoc(writer, neq.x);
@@ -357,9 +390,9 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (neq.x == .stack and neq.y == .stack) {
                     return error.UnsupportedBothStackValues;
                 }
-                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(neq.x), dumpLocation(neq.y) });
+                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(neq.x, 8), dumpLocation(neq.y, 8) });
                 try writer.print("\tsetne al\n", .{});
-                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(neq.x)});
+                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(neq.x, 8)});
             },
             .LessThan => |lt| {
                 _ = try prepareForLoc(writer, lt.x);
@@ -367,9 +400,9 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (lt.x == .stack and lt.y == .stack) {
                     return error.UnsupportedBothStackValues;
                 }
-                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(lt.x), dumpLocation(lt.y) });
+                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(lt.x, 8), dumpLocation(lt.y, 8) });
                 try writer.print("\tsetl al\n", .{});
-                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(lt.x)});
+                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(lt.x, 8)});
             },
             .LessEqual => |le| {
                 _ = try prepareForLoc(writer, le.x);
@@ -377,9 +410,9 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (le.x == .stack and le.y == .stack) {
                     return error.UnsupportedBothStackValues;
                 }
-                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(le.x), dumpLocation(le.y) });
+                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(le.x, 8), dumpLocation(le.y, 8) });
                 try writer.print("\tsetle al\n", .{});
-                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(le.x)});
+                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(le.x, 8)});
             },
             .GreaterThan => |gt| {
                 _ = try prepareForLoc(writer, gt.x);
@@ -387,9 +420,9 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (gt.x == .stack and gt.y == .stack) {
                     return error.UnsupportedBothStackValues;
                 }
-                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(gt.x), dumpLocation(gt.y) });
+                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(gt.x, 8), dumpLocation(gt.y, 8) });
                 try writer.print("\tsetg al\n", .{});
-                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(gt.x)});
+                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(gt.x, 8)});
             },
             .GreaterEqual => |ge| {
                 _ = try prepareForLoc(writer, ge.x);
@@ -397,13 +430,13 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 if (ge.x == .stack and ge.y == .stack) {
                     return error.UnsupportedBothStackValues;
                 }
-                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(ge.x), dumpLocation(ge.y) });
+                try writer.print("\tcmp {s}, {s}\n", .{ dumpLocation(ge.x, 8), dumpLocation(ge.y, 8) });
                 try writer.print("\tsetge al\n", .{});
-                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(ge.x)});
+                try writer.print("\tmovzx {s}, al\n", .{dumpLocation(ge.x, 8)});
             },
             .Not => |not| {
                 _ = try prepareForLoc(writer, not);
-                try writer.print("\txor {s}, 1\n", .{dumpLocation(not)});
+                try writer.print("\txor {s}, 1\n", .{dumpLocation(not, 8)});
             },
             else => unreachable,
         }

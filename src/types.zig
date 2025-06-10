@@ -82,7 +82,7 @@ pub fn CreateTypeVoid(allocator: Allocator, err: bool) !Type {
     return Type{ .decided = _type };
 }
 
-pub fn duplicateWithErrorUnion(allocator: Allocator, base: *const ast.Type, err: bool) !Type {
+pub fn duplicateWithErrorUnion(allocator: Allocator, base: *ast.Type, err: bool) !Type {
     const _type = try allocator.create(ast.Type);
     _type.* = base.*;
     _type.err = err;
@@ -199,6 +199,20 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
                     has_error = true;
             }
             break :blk duplicateWithErrorUnion(allocator, (try getTypeOfValue(ifstmt.scopes.items[0], ctx, allocator)).decided, has_error);
+        },
+        .errorCheck => |errcheck| {
+            const val_type = try getTypeOfValue(errcheck.value, ctx, allocator);
+            const scope_type = try getTypeOfScope(errcheck.scope, ctx, allocator);
+            if (val_type == .decided and !val_type.decided.err)
+                errors.bbcError("The value don't have errors to check", .{}, "");
+            if (scope_type == .decided and scope_type.decided.err)
+                errors.bbcError("The default scope can't have errors", .{}, "");
+            if (!scope_type.matchType(val_type))
+                errors.bbcError("The scope's type don't match the value's type", .{}, "");
+            // We can remove the error
+            if (val_type == .decided)
+                return duplicateWithErrorUnion(allocator, val_type.decided, false);
+            return val_type;
         },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
@@ -506,6 +520,11 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             }
             if (ifstmt.elsescope) |else_scope|
                 try inferTypeValue(else_scope, ctx, allocator, expType);
+        },
+        .parenthesis => |val| try inferTypeValue(val, ctx, allocator, expType),
+        .errorCheck => |errcheck| {
+            try inferTypeValue(errcheck.value, ctx, allocator, expType);
+            try inferTypeScope(errcheck.scope, ctx, allocator, expType);
         },
         else => {
             std.debug.print("Unimplemented {}\n", .{value});

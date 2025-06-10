@@ -362,6 +362,20 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         .funcall => |func| {
             return try analyseFuncall(func, ctx, allocator);
         },
+        .errorCheck => |errcheck| {
+            const val_type = try analyseValue(errcheck.value, ctx, allocator);
+            const scope_type = try analyseScope(errcheck.scope, ctx, allocator);
+            if (val_type == .decided and !val_type.decided.err)
+                errors.bbcError("The value don't have errors to check", .{}, "");
+            if (scope_type == .decided and scope_type.decided.err)
+                errors.bbcError("The default scope can't have errors", .{}, "");
+            if (!scope_type.matchType(val_type))
+                errors.bbcError("The scope's type don't match the value's type", .{}, "");
+            // We can remove the error
+            if (val_type == .decided)
+                return Types.duplicateWithErrorUnion(allocator, val_type.decided, false);
+            return val_type;
+        },
         else => unreachable,
     }
 }
@@ -465,7 +479,11 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     try Traits.initBasicTraits(ctx, allocator);
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
-            .FuncDef => try ctx.setFunction(inst.FuncDef.name, inst.FuncDef),
+            .FuncDef => {
+                if (ctx.functionExist(inst.FuncDef.name))
+                    errors.bbcErrorExit("Can't shadown the definition of function '{s}'", .{inst.FuncDef.name}, "");
+                try ctx.setFunction(inst.FuncDef.name, inst.FuncDef);
+            },
         }
     }
 

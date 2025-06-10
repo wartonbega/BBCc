@@ -320,6 +320,12 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
                 try traitUnion(&ret, &try getTypeTraits(else_scope, ctx, allocator));
             }
         },
+        .errorCheck => |errcheck| {
+            try traitUnion(&ret, &try getTypeTraits(errcheck.value, ctx, allocator));
+            for (errcheck.scope.code.items) |val| {
+                try traitUnion(&ret, &try getTypeTraits(val, ctx, allocator));
+            }
+        },
         else => {
             std.debug.print("Unimplemented {}", .{instruction});
             unreachable;

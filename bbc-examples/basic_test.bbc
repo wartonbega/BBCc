@@ -3,10 +3,24 @@ func toto (Int x) !Int {
     let b = if 1 == x 
         69
     else
-        42   
+        42
+    b
+}
+
+func toto_beau (Int x) !Int {
+    let b 
+    if (1 == x) {
+        b = 69
+    } else {
+        b = 42 / 2
+    } 
     b
 }
 
 func main () !Int {
-    toto(2)
+    toto_beau(2) ? err {
+        let a = 70
+        let b = "toto"
+        a
+    }
 }

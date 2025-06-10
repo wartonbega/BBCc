@@ -200,8 +200,9 @@ pub const VarDeclaration = struct {
 
 pub const Assignement = struct { lhs: *Value, rhs: *Value };
 
-pub const ErrCheck = struct { // Value ? Err (Errors,...) {scope};    Value: *Value,
-    errs: ArrayList(*Errors),
+pub const ErrCheck = struct { // Value ? err_name {scope};    Value: *Value,
+    value: *Value,
+    err: []const u8, // just the name
     scope: *Scope,
 };
 

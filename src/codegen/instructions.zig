@@ -182,6 +182,10 @@ pub const Instructions = union(enum) {
         to: Location,
         _type: Type,
     },
+    Load: struct {
+        from: Location,
+        to: Location,
+    },
     loadAddress: struct {
         from: Location,
         to: Location,
@@ -323,6 +327,10 @@ pub const Builder = struct {
 
     pub fn moveInst(self: *Builder, from: Location, to: Location, _type: Type) !void {
         try self.code.append(Instructions{ .Move = .{ .from = from, .to = to, ._type = _type } });
+    }
+
+    pub fn load(self: *Builder, from: Location, to: Location) !void {
+        try self.code.append(Instructions{ .Load = .{ .from = from, .to = to } });
     }
 
     pub fn loadAddress(self: *Builder, from: Location, to: Location) !void {
