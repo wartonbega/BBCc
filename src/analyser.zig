@@ -321,6 +321,7 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             var has_error = base_scope_type.decided.err;
 
             const bool_type = try Types.CreateTypeBool(allocator, false);
+            defer bool_type.deinit(allocator);
             for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
                 // First analysing the scope
                 const scope_type = try analyseValue(scope, ctx, allocator);
@@ -376,6 +377,26 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
                 return Types.duplicateWithErrorUnion(allocator, val_type.decided, false);
             return val_type;
         },
+        .While => |whileloop| {
+            const cond_type = try analyseValue(whileloop.condition, ctx, allocator);
+
+            const bool_type = try Types.CreateTypeBool(allocator, true);
+            defer bool_type.deinit(allocator);
+            const void_type = try Types.CreateTypeVoid(allocator, true);
+            defer void_type.deinit(allocator);
+
+            if (!cond_type.matchType(bool_type))
+                errors.bbcErrorExit("The condition of the while loop should have type 'Bool'", .{}, "");
+            const exec_type = try analyseValue(whileloop.exec, ctx, allocator);
+            if (!exec_type.matchType(void_type))
+                errors.bbcErrorExit("The exec'ed code should evaluate to type 'Void'", .{}, "");
+
+            // Can it evaluate to an error union ?
+            const has_error = cond_type == .decided and cond_type.decided.err or exec_type == .decided and exec_type.decided.err;
+
+            return Types.CreateTypeVoid(allocator, has_error);
+        },
+        .boolLit => return Types.CreateTypeBool(allocator, false),
         else => unreachable,
     }
 }

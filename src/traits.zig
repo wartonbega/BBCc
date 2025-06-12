@@ -275,6 +275,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
         .stringLit => {},
         .identifier => {},
         .varDec => {},
+        .boolLit => {},
         .assignement => |inst| {
             try traitUnion(&ret, &try getTypeTraits(inst.lhs, ctx, allocator));
             try traitUnion(&ret, &try getTypeTraits(inst.rhs, ctx, allocator));
@@ -325,6 +326,10 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             for (errcheck.scope.code.items) |val| {
                 try traitUnion(&ret, &try getTypeTraits(val, ctx, allocator));
             }
+        },
+        .While => |whileloop| {
+            try traitUnion(&ret, &try getTypeTraits(whileloop.condition, ctx, allocator));
+            try traitUnion(&ret, &try getTypeTraits(whileloop.exec, ctx, allocator));
         },
         else => {
             std.debug.print("Unimplemented {}", .{instruction});

@@ -135,6 +135,7 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
         .stringLit => try CreateTypeString(allocator, false),
         .charLit => try CreateTypeChar(allocator, false),
         .varDec => try CreateTypeVoid(allocator, false),
+        .boolLit => try CreateTypeBool(allocator, false),
         .assignement => |assign| blk: {
             const rhs_type = try getTypeOfValue(assign.rhs, ctx, allocator);
             if (rhs_type == .undecided)
@@ -213,6 +214,14 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
             if (val_type == .decided)
                 return duplicateWithErrorUnion(allocator, val_type.decided, false);
             return val_type;
+        },
+
+        .While => |whileloop| {
+            const cond_type = try getTypeOfValue(whileloop.condition, ctx, allocator);
+            const exec_type = try getTypeOfValue(whileloop.exec, ctx, allocator);
+            // Can it evaluate to an error union ?
+            const has_error = cond_type == .decided and cond_type.decided.err or exec_type == .decided and exec_type.decided.err;
+            return CreateTypeVoid(allocator, has_error);
         },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
@@ -525,6 +534,18 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .errorCheck => |errcheck| {
             try inferTypeValue(errcheck.value, ctx, allocator, expType);
             try inferTypeScope(errcheck.scope, ctx, allocator, expType);
+        },
+        .While => |whileloop| {
+            const err_allowed = expType == .decided and expType.decided.err;
+            const bool_type = try CreateTypeBool(allocator, err_allowed);
+            const void_type = try CreateTypeVoid(allocator, err_allowed);
+            try inferTypeValue(whileloop.condition, ctx, allocator, bool_type);
+            try inferTypeValue(whileloop.exec, ctx, allocator, void_type);
+        },
+        .boolLit => {
+            const bool_type = try CreateTypeBool(allocator, false);
+            if (!expType.matchType(bool_type))
+                errors.bbcErrorExit("Expected type '{s}' but the bool literal evaluates to 'Bool'", .{expType.toString(allocator)}, "");
         },
         else => {
             std.debug.print("Unimplemented {}\n", .{value});

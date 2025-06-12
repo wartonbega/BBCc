@@ -28,11 +28,15 @@ pub const TokenType = enum {
     IF,
     ELIF,
     ELSE,
+    WHILE,
+    FOR,
 
     IDENT, // identifier
     INTLIT, // Integer literal
     CHARLIT,
     STRINGLIT,
+    TRUE, // Boolean literal
+    FALSE,
 
     COLON, // :
 
@@ -69,6 +73,18 @@ fn getIdentType(ident: []const u8) TokenType {
     }
     if (std.mem.eql(u8, ident, "let")) {
         return TokenType.LET;
+    }
+    if (std.mem.eql(u8, ident, "while")) {
+        return TokenType.WHILE;
+    }
+    if (std.mem.eql(u8, ident, "for")) {
+        return TokenType.FOR;
+    }
+    if (std.mem.eql(u8, ident, "true")) {
+        return TokenType.TRUE;
+    }
+    if (std.mem.eql(u8, ident, "false")) {
+        return TokenType.FALSE;
     }
     return TokenType.IDENT;
 }

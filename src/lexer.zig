@@ -97,7 +97,8 @@ pub fn lexeListedValue(reader: *tokenReader, allocator: Allocator) !ArrayList(*a
 
 pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     // Value7:
-    //  | IF value0 {scope}
+    //  | IF value0 value0
+    //  | WHILE value0 value0
     //  | LET ident
     //  | ident
     //  | "stringlit" [TODO]
@@ -131,6 +132,17 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
             const operation = try allocator.create(ast.IfStmt);
             operation.* = ast.IfStmt{ .conditions = conditions, .scopes = scopes, .elsescope = else_scope };
             ret.* = ast.Value{ .If = operation };
+            return ret;
+        },
+        TokenType.WHILE => {
+            _ = reader.consume(TokenType.WHILE);
+            const condition = try lexeValue0(reader, allocator);
+            const exec = try lexeValue0(reader, allocator);
+
+            const ret = try allocator.create(ast.Value);
+            const operation = try allocator.create(ast.WhileLoop);
+            operation.* = ast.WhileLoop{ .condition = condition, .exec = exec };
+            ret.* = ast.Value{ .While = operation };
             return ret;
         },
         TokenType.LET => {
@@ -179,6 +191,12 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
             const val = reader.consume(TokenType.STRINGLIT);
             const ret = try allocator.create(ast.Value);
             ret.* = ast.Value{ .stringLit = val.value };
+            return ret;
+        },
+        TokenType.TRUE, TokenType.FALSE => |boollit| {
+            _ = reader.consume(boollit);
+            const ret = try allocator.create(ast.Value);
+            ret.* = ast.Value{ .boolLit = boollit == .TRUE };
             return ret;
         },
         TokenType.FN_DEC => {

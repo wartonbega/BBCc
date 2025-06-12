@@ -190,6 +190,11 @@ pub const IfStmt = struct {
     elsescope: ?*Value,
 };
 
+pub const WhileLoop = struct {
+    condition: *Value,
+    exec: *Value, // The code executed in loop
+};
+
 pub const VarDeclaration = struct {
     mutable: bool,
     name: []const u8,
@@ -217,6 +222,7 @@ pub const Function = struct { arguments: ArrayList(*Arguments), return_type: *Ty
 
 pub const Value = union(enum) {
     intLit: i32,
+    boolLit: bool,
     stringLit: []const u8, // String literal : "Hello World"
     charLit: u8,
     parenthesis: *Value,
@@ -226,6 +232,7 @@ pub const Value = union(enum) {
     binaryOperator: *binaryOperation,
     errorCheck: *ErrCheck,
     If: *IfStmt,
+    While: *WhileLoop,
     typeCasting: *TypeCasting,
     scope: *Scope,
     funcall: *Funcall,

@@ -299,6 +299,11 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             try ctx.builder.intLit(@intCast(intlit), dest);
             return dest;
         },
+        .boolLit => |boollit| {
+            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
+            try ctx.builder.charLit(if (boollit) 1 else 0, dest);
+            return dest;
+        },
         .identifier => |ident| {
             // We move the value idealy to one of the registers, but otherwise on the stack
             const origin = scopeCtx.getVariable(ident);
@@ -487,6 +492,18 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             try ctx.builder.moveInst(zero_loc, Inst.Location{ .label = &error_union_label.* }, compile_type);
             try ctx.builder.labelDec(default_label);
             return ret;
+        },
+        .While => |whileloop| {
+            const w_begin = try ctx.generateLabel("while_begin");
+            const w_end = try ctx.generateLabel("while_end");
+            try ctx.builder.labelDec(w_begin);
+            const cond = try generateValue(whileloop.condition, scopeCtx, ctx, no_err_jmp);
+            try ctx.builder.not(cond);
+            try ctx.builder.conditionalJump(cond, w_end);
+            _ = try generateValue(whileloop.exec, scopeCtx, ctx, no_err_jmp);
+            try ctx.builder.jump(w_begin);
+            try ctx.builder.labelDec(w_end);
+            return Inst.Location{ .void = {} };
         },
         else => {
             std.debug.print("Unimplemented: {}\n", .{value.*});

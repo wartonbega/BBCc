@@ -18,9 +18,8 @@ func toto_beau (Int x) !Int {
 }
 
 func main () !Int {
-    toto_beau(2) ? err {
-        let a = 70
-        let b = "toto"
-        a
-    }
+    let a = 1
+    while a < 69
+        a = a + 1
+    a
 }
