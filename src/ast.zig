@@ -4,15 +4,6 @@ const analyser = @import("analyser.zig");
 
 const ArrayList = std.ArrayList;
 
-//const ProgInstructions = union(enum) {
-//    Number: i32,
-//    Add: struct {
-//        left: *Expr,
-//        right: *Expr,
-//    },
-//    Var: []const u8,
-//};
-
 pub const Errors = enum {
     DivByZeroErr,
     ValueErr,
@@ -162,6 +153,8 @@ pub const binaryOperation = struct {
     rhs: *Value,
     operator: binOperator,
     lhs: *Value,
+    reference: []const u8,
+
     pub fn print(self: *binaryOperation, rec: i32) void {
         _ = switch (self.operator) {
             .Plus => std.debug.print("+", .{}),
@@ -180,7 +173,11 @@ pub const RightUnaryOperators = union(enum) {
     pointAttr: []const u8,
 };
 
-pub const UnaryOperatorRight = struct { operator: RightUnaryOperators, expr: *Value };
+pub const UnaryOperatorRight = struct {
+    operator: RightUnaryOperators,
+    expr: *Value,
+    reference: []const u8,
+};
 
 // If statement, the multiple elif conditions are stored in conditions, and the corresponding scopes in scopes
 // finally the else statement is in elsescope
@@ -188,27 +185,35 @@ pub const IfStmt = struct {
     conditions: ArrayList(*Value),
     scopes: ArrayList(*Value), // The different 'scopes'
     elsescope: ?*Value,
+    reference: []const u8,
 };
 
 pub const WhileLoop = struct {
     condition: *Value,
     exec: *Value, // The code executed in loop
+    reference: []const u8,
 };
 
 pub const VarDeclaration = struct {
     mutable: bool,
     name: []const u8,
+    reference: []const u8,
     pub fn print(self: *VarDeclaration) void {
         std.debug.print("{s} {s}\n", .{ if (self.mutable) "const" else "mut", self.name });
     }
 };
 
-pub const Assignement = struct { lhs: *Value, rhs: *Value };
+pub const Assignement = struct {
+    lhs: *Value,
+    rhs: *Value,
+    reference: []const u8,
+};
 
-pub const ErrCheck = struct { // Value ? err_name {scope};    Value: *Value,
+pub const ErrCheck = struct { // Value ? err_name scope;    Value: *Value, scope: *Value
     value: *Value,
     err: []const u8, // just the name
-    scope: *Scope,
+    scope: *Value, // The return value if 'value' has errors
+    reference: []const u8,
 };
 
 pub const TypeCasting = struct { dest_type: *Type, orgn_Value: *Value };
@@ -218,22 +223,42 @@ pub const Funcall = struct { // For a function call
     args: ArrayList(*Value),
 };
 
-pub const Function = struct { arguments: ArrayList(*Arguments), return_type: *Type, code: *Scope };
+pub const Function = struct {
+    arguments: ArrayList(*Arguments),
+    return_type: *Type,
+    code: *Scope,
+    reference: []const u8,
+};
 
 pub const Value = union(enum) {
-    intLit: i32,
-    boolLit: bool,
-    stringLit: []const u8, // String literal : "Hello World"
-    charLit: u8,
+    intLit: struct {
+        value: i32,
+        reference: []const u8,
+    },
+    boolLit: struct {
+        value: bool,
+        reference: []const u8,
+    },
+    stringLit: struct {
+        value: []const u8,
+        reference: []const u8,
+    }, // String literal : "Hello World"
+    charLit: struct {
+        value: u8,
+        reference: []const u8,
+    },
+    identifier: struct {
+        name: []const u8,
+        reference: []const u8,
+    },
     parenthesis: *Value,
-    identifier: []const u8,
     //UnaryOperatorLeft(UnaryOperatorLeft),
     unaryOperatorRight: *UnaryOperatorRight, // Like a.b ('.b' is the operator)
     binaryOperator: *binaryOperation,
     errorCheck: *ErrCheck,
     If: *IfStmt,
     While: *WhileLoop,
-    typeCasting: *TypeCasting,
+    //typeCasting: *TypeCasting,
     scope: *Scope,
     funcall: *Funcall,
     assignement: *Assignement,
@@ -264,17 +289,41 @@ pub const Value = union(enum) {
             else => std.debug.print("{}\n", .{self.*}),
         };
     }
+
+    pub fn getReference(self: *Value) []const u8 {
+        return switch (self.*) {
+            .intLit => |value| value.reference,
+            .charLit => |value| value.reference,
+            .boolLit => |value| value.reference,
+            .stringLit => |value| value.reference,
+            .identifier => |value| value.reference,
+            .parenthesis => |value| value.getReference(),
+            .unaryOperatorRight => |value| value.reference,
+            .binaryOperator => |value| value.reference,
+            .errorCheck => |value| value.reference,
+            .If => |value| value.reference,
+            .While => |value| value.reference,
+            .scope => |value| value.reference,
+            .funcall => |value| value.func.getReference(),
+            .assignement => |value| value.reference,
+            .varDec => |value| value.reference,
+            .function => |value| value.reference,
+            .NULL => "",
+        };
+    }
 };
 
 pub const Scope = struct {
     code: ArrayList(*Value),
     ctx: *analyser.Context,
+    reference: []const u8,
 
-    pub fn init(code: ArrayList(*Value), allocator: std.mem.Allocator) !*Scope {
+    pub fn init(code: ArrayList(*Value), reference: []const u8, allocator: std.mem.Allocator) !*Scope {
         const self = try allocator.create(Scope);
         self.* = Scope{
             .code = code,
             .ctx = try analyser.Context.init(allocator),
+            .reference = reference,
         };
         return self;
     }
@@ -289,6 +338,8 @@ pub const Scope = struct {
 pub const Arguments = struct {
     _type: *Type,
     name: []const u8,
+    reference: []const u8,
+
     pub fn print(self: *Arguments) void {
         self._type.print();
         std.debug.print(" {s}", .{self.name});
@@ -298,6 +349,7 @@ pub const Arguments = struct {
 pub const TypeParam = struct {
     name: []const u8,
     traits: ArrayList([]const u8),
+    reference: []const u8,
 };
 
 pub const funcDef = struct {
@@ -306,6 +358,8 @@ pub const funcDef = struct {
     return_type: *Type,
     code: *Scope,
     typeparam: ArrayList(TypeParam),
+    reference: []const u8,
+
     pub fn print(self: *funcDef) void {
         std.debug.print("function '{s}' (", .{self.name});
         for (self.arguments.items) |arg| {

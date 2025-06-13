@@ -98,19 +98,19 @@ pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Conte
     for (func.args.items, functype.argtypes.items) |a, b| {
         const argtype = try getTypeOfValue(a, ctx, allocator);
         switch (argtype) {
-            .undecided => errors.bbcErrorExit("Unable to determine the type of the argument", .{}, ""),
+            .undecided => errors.bbcErrorExit("Unable to determine the type of the argument", .{}, a.getReference()),
             .decided => {
                 // If there's a type alias, then we get to assign it
                 if (b.*.base == .name and analyser.typeparamContains(functype.typeparam, b.base.name)) {
                     if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
-                        errors.bbcErrorExit("'{s}'' is already set to be type '{s}'", .{
+                        errors.bbcErrorExit("'{s}' is already set to be type '{s}'", .{
                             b.*.base.name,
                             func_version.get(b.*.base.name).?.toString(allocator),
-                        }, "");
+                        }, a.getReference());
                     }
                     try func_version.put(b.*.base.name, argtype);
                 } else if (!argtype.decided.match(b)) {
-                    errors.bbcErrorExit("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, "");
+                    errors.bbcErrorExit("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, a.getReference());
                 }
             },
         }
@@ -139,15 +139,15 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
         .assignement => |assign| blk: {
             const rhs_type = try getTypeOfValue(assign.rhs, ctx, allocator);
             if (rhs_type == .undecided)
-                errors.bbcErrorExit("Can't decide the type of the right hand side of the assignation", .{}, "");
+                errors.bbcErrorExit("Can't decide the type of the right hand side of the assignation", .{}, value.getReference());
             break :blk try CreateTypeVoid(allocator, rhs_type.decided.err);
         },
         .parenthesis => try getTypeOfValue(value.parenthesis, ctx, allocator),
         .identifier => |ident| blk: {
-            if (ctx.functionExist(ident))
-                return Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident), allocator) };
-            if (ctx.variableExist(ident))
-                break :blk ctx.getVariable(ident);
+            if (ctx.functionExist(ident.name))
+                return Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident.name), allocator) };
+            if (ctx.variableExist(ident.name))
+                break :blk ctx.getVariable(ident.name);
             break :blk Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
         },
         .scope => try getTypeOfScope(value.scope, ctx, allocator),
@@ -160,16 +160,16 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
                 .undecided => return f_signature,
                 .decided => |t| {
                     switch (t.base) {
-                        .name => |name| errors.bbcErrorExit("Can't call a non-function value of type {s}", .{name}, ""),
+                        .name => |name| errors.bbcErrorExit("Can't call a non-function value of type {s}", .{name}, func.func.getReference()),
                         .function => |functype| {
                             if (func.args.items.len != functype.argtypes.items.len)
-                                errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ func.args.items.len, functype.argtypes.items.len }, "");
+                                errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ func.args.items.len, functype.argtypes.items.len }, func.func.getReference());
                             // We can build the current function version, which shall have to be compiled later
                             var func_version = try getFuncallVersion(func, functype, ctx, allocator);
                             const ret_type = t.base.function.retype.base;
                             if (ret_type == .name and analyser.typeparamContains(t.base.function.typeparam, ret_type.name)) {
                                 if (!func_version.contains(ret_type.name))
-                                    errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, "");
+                                    errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, func.func.getReference());
                                 break :blk func_version.get(ret_type.name).?;
                             }
                             break :blk Type{ .decided = t.base.function.retype };
@@ -184,6 +184,7 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
             ctx,
             try getTypeOfValue(binop.rhs, ctx, allocator),
             try getTypeOfValue(binop.lhs, ctx, allocator),
+            binop.reference,
             allocator,
         ),
         // For an if statement, the type is
@@ -203,13 +204,13 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
         },
         .errorCheck => |errcheck| {
             const val_type = try getTypeOfValue(errcheck.value, ctx, allocator);
-            const scope_type = try getTypeOfScope(errcheck.scope, ctx, allocator);
+            const scope_type = try getTypeOfValue(errcheck.scope, ctx, allocator);
             if (val_type == .decided and !val_type.decided.err)
-                errors.bbcError("The value don't have errors to check", .{}, "");
+                errors.bbcErrorExit("The value don't have errors to check", .{}, errcheck.value.getReference());
             if (scope_type == .decided and scope_type.decided.err)
-                errors.bbcError("The default scope can't have errors", .{}, "");
+                errors.bbcErrorExit("The default scope can't have errors", .{}, errcheck.scope.getReference());
             if (!scope_type.matchType(val_type))
-                errors.bbcError("The scope's type don't match the value's type", .{}, "");
+                errors.bbcErrorExit("The scope's type don't match the value's type", .{}, errcheck.reference);
             // We can remove the error
             if (val_type == .decided)
                 return duplicateWithErrorUnion(allocator, val_type.decided, false);
@@ -233,17 +234,17 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
 pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator, expType: Type) std.mem.Allocator.Error!void {
     const function_type = try getTypeOfValue(value.func, ctx, allocator);
     switch (function_type) {
-        .undecided => errors.bbcErrorExit("Not able to get the type of the function", .{}, ""),
+        .undecided => errors.bbcErrorExit("Not able to get the type of the function", .{}, value.func.getReference()),
         .decided => {},
     }
     switch (function_type.decided.base) {
-        .name => |name| errors.bbcErrorExit("The type {s} is not callable", .{name}, ""),
+        .name => |name| errors.bbcErrorExit("The type {s} is not callable", .{name}, value.func.getReference()),
         .function => {},
     }
     const signature = function_type.decided.base.function;
     var func_version = std.hash_map.StringHashMap(Type).init(allocator);
     if (value.args.items.len != signature.argtypes.items.len)
-        errors.bbcErrorExit("The number of arguments ({d}) does not match the function's ({d})", .{ value.args.items.len, signature.argtypes.items.len }, "");
+        errors.bbcErrorExit("The number of arguments ({d}) does not match the function's ({d})", .{ value.args.items.len, signature.argtypes.items.len }, value.func.getReference());
     for (value.args.items, signature.argtypes.items) |arg, t| {
         const argtype = try getTypeOfValue(arg, ctx, allocator);
         // Adding a type to the version
@@ -253,7 +254,7 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
                 errors.bbcErrorExit("'{s}'' is already set to be type '{s}'", .{
                     t.base.name,
                     func_version.get(t.base.name).?.toString(allocator),
-                }, "");
+                }, arg.getReference());
             }
             try func_version.put(t.base.name, argtype);
         }
@@ -269,12 +270,12 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
     const ret_type = signature.retype.base;
     if (ret_type == .name and analyser.typeparamContains(signature.typeparam, ret_type.name)) {
         if (!func_version.contains(ret_type.name))
-            errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, "");
+            errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, value.func.getReference());
 
         if (!func_version.get(ret_type.name).?.match(expType.decided))
-            errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, "");
+            errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, value.func.getReference());
     } else if (!signature.retype.match(expType.decided))
-        errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, "");
+        errors.bbcErrorExit("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, value.func.getReference());
 
     try ctx.addFunctionToCompile(analyser.functionVersion{
         .name = signature.fname,
@@ -292,7 +293,7 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
     _ = expType;
     // Check if lhsType implements the required trait for the operator.
     if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, lhsType, op_trait))
-        errors.bbcErrorExit("Can't use operator '{s}' on type '{s}', because it does not implement the right trait", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
+        errors.bbcErrorExit("Can't use operator '{s}' on type '{s}', because it does not implement the right trait", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, lhsValue.getReference());
 
     switch (lhsType) {
         .decided => |_| {
@@ -329,18 +330,18 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                             try found_matching_funcs.append(func);
                     }
                     if (found_matching_funcs.items.len == 0)
-                        errors.bbcErrorExit("Found no suitable implementation of '{s}' for type '{s}'", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
+                        errors.bbcErrorExit("Found no suitable implementation of '{s}' for type '{s}'", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, lhsValue.getReference());
                     if (found_matching_funcs.items.len > 1)
-                        errors.bbcErrorExit("Found more than 1 suitable implementation of '{s}' for type '{s}'. Can't decide...", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
+                        errors.bbcErrorExit("Found more than 1 suitable implementation of '{s}' for type '{s}'. Can't decide...", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, lhsValue.getReference());
                     const matched_func = found_matching_funcs.items[0];
                     if (matched_func.signature.argtypes.items.len != 1)
-                        errors.bbcErrorExit("The function {s} does not have enough arguments", .{matched_func.name}, "");
+                        errors.bbcErrorExit("The function {s} does not have enough arguments", .{matched_func.name}, lhsValue.getReference());
                     const arg_type = matched_func.signature.argtypes.items[0];
                     try inferTypeValue(rhsValue, ctx, allocator, Type{ .decided = arg_type });
                 },
             }
             if (!found)
-                errors.bbcErrorExit("No suitable operator implementation found for '{s}' on type '{s}'", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
+                errors.bbcErrorExit("No suitable operator implementation found for '{s}' on type '{s}'", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, lhsValue.getReference());
         },
         .undecided => |traits_list| {
             // Find all types that implement all traits in traits_list
@@ -366,9 +367,9 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                 }
             }
             if (matching_types.items.len == 0) {
-                errors.bbcErrorExit("No type implements all required traits for operator '{s}'", .{ast.reprBinOp(op)}, "");
+                errors.bbcErrorExit("No type implements all required traits for operator '{s}'", .{ast.reprBinOp(op)}, lhsValue.getReference());
             } else if (matching_types.items.len > 1) {
-                errors.bbcErrorExit("Ambiguous operator '{s}': multiple types implement all required traits", .{ast.reprBinOp(op)}, "");
+                errors.bbcErrorExit("Ambiguous operator '{s}': multiple types implement all required traits", .{ast.reprBinOp(op)}, lhsValue.getReference());
             } else {
                 const funcs = ctx.type_implem.get(matching_types.items[0].base.name).?;
                 var selected_func: ?@TypeOf(funcs.items[0]) = null;
@@ -408,7 +409,7 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                     },
                 }
                 if (selected_func == null) {
-                    errors.bbcErrorExit("No suitable operator implementation found for '{s}' on type '{s}'", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, "");
+                    errors.bbcErrorExit("No suitable operator implementation found for '{s}' on type '{s}'", .{ ast.reprBinOp(op), lhsType.toString(allocator) }, lhsValue.getReference());
                 }
                 switch (rhsType) {
                     .decided => {},
@@ -434,7 +435,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .varDec => |vardec| {
             const vartype = ctx.getVariable(vardec.name);
             switch (vartype) {
-                .undecided => errors.bbcErrorExit("Unable to decide the type of '{s}'", .{vardec.name}, ""),
+                .undecided => errors.bbcErrorExit("Unable to decide the type of '{s}'", .{vardec.name}, vardec.reference),
                 .decided => {},
             }
         },
@@ -446,17 +447,17 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 rhs_type.err = false;
                 break :blk Type{ .decided = rhs_type };
             } else expType; // We can just set it without copying, it's alright
-            if (ctx.functionExist(ident)) {
-                const f_type = Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident), allocator) };
+            if (ctx.functionExist(ident.name)) {
+                const f_type = Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident.name), allocator) };
                 if (!f_type.matchType(real_exp_type))
-                    errors.bbcErrorExit("The expected type {s} does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident, ctx.getVariable(ident).toString(allocator) }, "");
+                    errors.bbcErrorExit("The expected type {s} does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, ctx.getVariable(ident.name).toString(allocator) }, ident.reference);
                 return;
             }
-            if (!ctx.variableExist(ident))
-                errors.bbcErrorExit("The variable {s} is not declared (infer)", .{ident}, "");
-            if (!ctx.getVariable(ident).matchType(real_exp_type))
-                errors.bbcErrorExit("The expected type {s}  does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident, ctx.getVariable(ident).toString(allocator) }, "");
-            try ctx.setVariable(ident, real_exp_type);
+            if (!ctx.variableExist(ident.name))
+                errors.bbcErrorExit("The variable {s} is not declared (infer)", .{ident.name}, "");
+            if (!ctx.getVariable(ident.name).matchType(real_exp_type))
+                errors.bbcErrorExit("The expected type {s}  does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, ctx.getVariable(ident.name).toString(allocator) }, ident.reference);
+            try ctx.setVariable(ident.name, real_exp_type);
         },
         .assignement => |assign| {
             const rhsType = try getTypeOfValue(assign.rhs, ctx, allocator);
@@ -465,10 +466,10 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 .undecided => false,
             });
             if (!ret_type.matchType(expType))
-                errors.bbcErrorExit("The expected type '{s}' does not match the type got for an assignation: !Void", .{expType.toString(allocator)}, "");
+                errors.bbcErrorExit("The expected type '{s}' does not match the type got for an assignation: !Void", .{expType.toString(allocator)}, assign.reference);
             const lhsType =
                 switch (assign.lhs.*) {
-                    .identifier => |ident| ctx.getVariable(ident),
+                    .identifier => |ident| ctx.getVariable(ident.name),
                     .varDec => |vardec| ctx.getVariable(vardec.name),
                     else => unreachable,
                 };
@@ -483,7 +484,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                     switch (lhsType) {
                         .decided => {
                             if (!real_right_type.matchType(lhsType))
-                                errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's {s}", .{ real_right_type.toString(allocator), lhsType.toString(allocator) }, "");
+                                errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's {s}", .{ real_right_type.toString(allocator), lhsType.toString(allocator) }, assign.reference);
                         },
                         .undecided => {
                             try inferTypeValue(assign.lhs, ctx, allocator, real_right_type);
@@ -496,21 +497,21 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                         try inferTypeValue(assign.lhs, ctx, allocator, lhsType);
                         try inferTypeValue(assign.rhs, ctx, allocator, lhsType);
                     },
-                    .undecided => errors.bbcErrorExit("Cannot evaluate the type of both side of the assignation", .{}, ""),
+                    .undecided => errors.bbcErrorExit("Cannot evaluate the type of both side of the assignation", .{}, assign.reference),
                 },
             }
         },
         .intLit => {
             if (!intType.matchType(expType))
-                errors.bbcErrorExit("Expected type {s} but it evaluates to Int", .{expType.toString(allocator)}, "");
+                errors.bbcErrorExit("Expected type {s} but it evaluates to Int", .{expType.toString(allocator)}, value.getReference());
         },
         .charLit => {
             if (!charType.matchType(expType))
-                errors.bbcErrorExit("Expected type {s} but it evaluates to Char", .{expType.toString(allocator)}, "");
+                errors.bbcErrorExit("Expected type {s} but it evaluates to Char", .{expType.toString(allocator)}, value.getReference());
         },
         .stringLit => {
             if (!stringType.matchType(expType))
-                errors.bbcErrorExit("Expected type {s} but it evaluates to String", .{expType.toString(allocator)}, "");
+                errors.bbcErrorExit("Expected type {s} but it evaluates to String", .{expType.toString(allocator)}, value.getReference());
         },
         .scope => |scope| {
             try inferTypeScope(scope, ctx, allocator, expType);
@@ -533,7 +534,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .parenthesis => |val| try inferTypeValue(val, ctx, allocator, expType),
         .errorCheck => |errcheck| {
             try inferTypeValue(errcheck.value, ctx, allocator, expType);
-            try inferTypeScope(errcheck.scope, ctx, allocator, expType);
+            try inferTypeValue(errcheck.scope, ctx, allocator, expType);
         },
         .While => |whileloop| {
             const err_allowed = expType == .decided and expType.decided.err;
@@ -545,7 +546,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .boolLit => {
             const bool_type = try CreateTypeBool(allocator, false);
             if (!expType.matchType(bool_type))
-                errors.bbcErrorExit("Expected type '{s}' but the bool literal evaluates to 'Bool'", .{expType.toString(allocator)}, "");
+                errors.bbcErrorExit("Expected type '{s}' but the bool literal evaluates to 'Bool'", .{expType.toString(allocator)}, value.getReference());
         },
         else => {
             std.debug.print("Unimplemented {}\n", .{value});
@@ -573,7 +574,7 @@ pub fn inferTypeScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator, re
     var it = scope.ctx.variables.iterator();
     while (it.next()) |kv| {
         switch (kv.value_ptr.*) {
-            .undecided => errors.bbcErrorExit("Unable to decide the implicit type of '{s}'' ", .{kv.key_ptr.*}, ""),
+            .undecided => errors.bbcErrorExit("Unable to decide the implicit type of '{s}'' ", .{kv.key_ptr.*}, scope.reference),
             .decided => {},
         }
     }

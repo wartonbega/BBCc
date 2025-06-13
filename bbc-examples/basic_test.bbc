@@ -1,7 +1,11 @@
 
-func toto (Int x) !Int {
+func basic_func ( ) !Int {
+    98 / 2
+}
+
+func toto (Int x) Int {
     let b = if 1 == x 
-        69
+        420
     else
         42
     b
@@ -10,7 +14,7 @@ func toto (Int x) !Int {
 func toto_beau (Int x) !Int {
     let b 
     if (1 == x) {
-        b = 69
+        b = 90
     } else {
         b = 42 / 2
     } 
@@ -18,8 +22,6 @@ func toto_beau (Int x) !Int {
 }
 
 func main () !Int {
-    let a = 1
-    while a < 69
-        a = a + 1
+    let a = 1/2 ? err {69}
     a
 }

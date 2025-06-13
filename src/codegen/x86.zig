@@ -272,8 +272,12 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                     _ = try prepareForLoc(writer, arg);
                     try writer.print("\tmov {s}, {s}\n", .{ reg(destreg, 8), dumpLocation(arg, 8) });
                 }
-                _ = try prepareForLoc(writer, funcall.func);
-                try writer.print("\tcall {s}\n", .{dumpLocation(funcall.func, 8)});
+                if (funcall.func == .label) {
+                    try writer.print("\tcall {s}\n", .{funcall.func.label});
+                } else {
+                    _ = try prepareForLoc(writer, funcall.func);
+                    try writer.print("\tcall {s}\n", .{dumpLocation(funcall.func, 8)});
+                }
             },
             .beginVariableSection => {
                 try writer.print("\nsection .bss\n", .{});

@@ -301,7 +301,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             switch (lhs_type) {
                 .decided => |_type| {
                     switch (_type.base) {
-                        .function => errors.bbcErrorExit("'function' like type (here {s}) don't support operations", .{_type.toString(allocator)}, ""),
+                        .function => errors.bbcErrorExit("'function' like type (here {s}) don't support operations", .{_type.toString(allocator)}, binop.reference),
                         .name => |n| {
                             if (!ret.contains(n))
                                 try ret.put(n, ArrayList(Trait).init(allocator));
@@ -323,9 +323,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
         },
         .errorCheck => |errcheck| {
             try traitUnion(&ret, &try getTypeTraits(errcheck.value, ctx, allocator));
-            for (errcheck.scope.code.items) |val| {
-                try traitUnion(&ret, &try getTypeTraits(val, ctx, allocator));
-            }
+            try traitUnion(&ret, &try getTypeTraits(errcheck.scope, ctx, allocator));
         },
         .While => |whileloop| {
             try traitUnion(&ret, &try getTypeTraits(whileloop.condition, ctx, allocator));

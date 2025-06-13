@@ -75,7 +75,11 @@ pub fn lexeType(reader: *tokenReader, allocator: Allocator) !*ast.Type {
     const base_name = reader.consume(TokenType.IDENT).value;
 
     const ret = try allocator.create(ast.Type);
-    ret.* = ast.Type{ .base = ast.TypeBase{ .name = base_name }, .err = opt_error, .references = references_counter };
+    ret.* = ast.Type{
+        .base = ast.TypeBase{ .name = base_name },
+        .err = opt_error,
+        .references = references_counter,
+    };
     return ret;
 }
 
@@ -84,7 +88,7 @@ pub fn lexeListedValue(reader: *tokenReader, allocator: Allocator) !ArrayList(*a
     // | (val, val, val,...)
     var ret = ArrayList(*ast.Value).init(allocator);
     _ = reader.consume(TokenType.O_PAR);
-    while (reader.canPeek()) {
+    while (reader.canPeek() and (try reader.peek()).type != TokenType.C_PAR) {
         const val = try lexeValue0(reader, allocator);
         try ret.append(val);
         if ((try reader.peek()).type == TokenType.C_PAR)
@@ -114,7 +118,8 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
             var scopes = ArrayList(*ast.Value).init(allocator);
             var else_scope: ?*ast.Value = null;
 
-            _ = reader.consume(TokenType.IF);
+            const if_tok = reader.consume(TokenType.IF);
+            const code_ref = if_tok.pos;
             try conditions.append(try lexeValue0(reader, allocator));
             try scopes.append(try lexeValue0(reader, allocator));
 
@@ -130,18 +135,29 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
 
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.IfStmt);
-            operation.* = ast.IfStmt{ .conditions = conditions, .scopes = scopes, .elsescope = else_scope };
+            operation.* = ast.IfStmt{
+                .conditions = conditions,
+                .scopes = scopes,
+                .elsescope = else_scope,
+                .reference = code_ref,
+            };
             ret.* = ast.Value{ .If = operation };
             return ret;
         },
         TokenType.WHILE => {
-            _ = reader.consume(TokenType.WHILE);
+            const while_tok = reader.consume(TokenType.WHILE);
+            const code_ref = while_tok.pos;
+
             const condition = try lexeValue0(reader, allocator);
             const exec = try lexeValue0(reader, allocator);
 
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.WhileLoop);
-            operation.* = ast.WhileLoop{ .condition = condition, .exec = exec };
+            operation.* = ast.WhileLoop{
+                .condition = condition,
+                .exec = exec,
+                .reference = code_ref,
+            };
             ret.* = ast.Value{ .While = operation };
             return ret;
         },
@@ -150,20 +166,30 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
             const name = reader.consume(TokenType.IDENT);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.VarDeclaration);
-            operation.* = ast.VarDeclaration{ .mutable = false, .name = name.value };
+            operation.* = ast.VarDeclaration{
+                .mutable = false,
+                .name = name.value,
+                .reference = name.pos,
+            };
             ret.* = ast.Value{ .varDec = operation };
             return ret;
         },
         TokenType.IDENT => {
             const name = reader.consume(TokenType.IDENT);
             const ret = try allocator.create(ast.Value);
-            ret.* = ast.Value{ .identifier = name.value };
+            ret.* = ast.Value{ .identifier = .{
+                .name = name.value,
+                .reference = name.pos,
+            } };
             return ret;
         },
         TokenType.INTLIT => {
             const value = reader.consume(TokenType.INTLIT);
             const ret = try allocator.create(ast.Value);
-            ret.* = ast.Value{ .intLit = try std.fmt.parseInt(i32, value.value, 10) };
+            ret.* = ast.Value{ .intLit = .{
+                .value = try std.fmt.parseInt(i32, value.value, 10),
+                .reference = value.pos,
+            } };
             return ret;
         },
         TokenType.O_CUR => {
@@ -184,23 +210,32 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
         TokenType.CHARLIT => {
             const val = reader.consume(TokenType.CHARLIT);
             const ret = try allocator.create(ast.Value);
-            ret.* = ast.Value{ .charLit = val.value[0] };
+            ret.* = ast.Value{ .charLit = .{
+                .value = val.value[0],
+                .reference = val.pos,
+            } };
             return ret;
         },
         TokenType.STRINGLIT => {
             const val = reader.consume(TokenType.STRINGLIT);
             const ret = try allocator.create(ast.Value);
-            ret.* = ast.Value{ .stringLit = val.value };
+            ret.* = ast.Value{ .stringLit = .{
+                .value = val.value,
+                .reference = val.pos,
+            } };
             return ret;
         },
         TokenType.TRUE, TokenType.FALSE => |boollit| {
-            _ = reader.consume(boollit);
+            const val = reader.consume(boollit);
             const ret = try allocator.create(ast.Value);
-            ret.* = ast.Value{ .boolLit = boollit == .TRUE };
+            ret.* = ast.Value{ .boolLit = .{
+                .value = boollit == .TRUE,
+                .reference = val.pos,
+            } };
             return ret;
         },
         TokenType.FN_DEC => {
-            _ = reader.consume(TokenType.FN_DEC);
+            const fn_dec_tok = reader.consume(TokenType.FN_DEC);
             _ = reader.consume(TokenType.O_PAR);
             const args = try lexeArguments(reader, allocator);
             const rettype = try lexeType(reader, allocator);
@@ -213,6 +248,7 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                 .arguments = args,
                 .code = code,
                 .return_type = rettype,
+                .reference = fn_dec_tok.pos,
             };
             ret.* = ast.Value{ .function = function };
             return ret;
@@ -223,6 +259,8 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
         },
     }
 }
+
+// TODO: inverser value6 et value5
 
 pub fn lexeValue6(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     // Value6:
@@ -241,7 +279,11 @@ pub fn lexeValue6(reader: *tokenReader, allocator: Allocator) !*ast.Value {
             const ident = reader.consume(TokenType.IDENT);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.UnaryOperatorRight);
-            operation.* = ast.UnaryOperatorRight{ .expr = lhs, .operator = ast.RightUnaryOperators{ .pointAttr = ident.value } };
+            operation.* = ast.UnaryOperatorRight{
+                .expr = lhs,
+                .operator = ast.RightUnaryOperators{ .pointAttr = ident.value },
+                .reference = ident.pos,
+            };
             ret.* = ast.Value{ .unaryOperatorRight = operation };
             lhs = ret;
             break :blk true;
@@ -285,7 +327,7 @@ pub fn lexeValue4(reader: *tokenReader, allocator: Allocator) !*ast.Value {
         return lhs;
     switch ((try reader.peek()).type) {
         TokenType.TIMES, TokenType.DIV => |optype| {
-            _ = reader.consume(optype);
+            const operator = reader.consume(optype);
             const rhs = try lexeValue4(reader, allocator);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.binaryOperation);
@@ -297,6 +339,7 @@ pub fn lexeValue4(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                     TokenType.TIMES => ast.binOperator.Times,
                     else => ast.binOperator.Times, // We need a default value
                 },
+                .reference = operator.pos,
             };
             ret.* = ast.Value{ .binaryOperator = operation };
             return ret;
@@ -316,7 +359,7 @@ pub fn lexeValue3(reader: *tokenReader, allocator: Allocator) !*ast.Value {
         return lhs;
     switch ((try reader.peek()).type) {
         TokenType.PLUS, TokenType.MINUS => |optype| {
-            _ = reader.consume(optype);
+            const operator = reader.consume(optype);
             const rhs = try lexeValue3(reader, allocator);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.binaryOperation);
@@ -328,6 +371,7 @@ pub fn lexeValue3(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                     TokenType.MINUS => ast.binOperator.Minus,
                     else => ast.binOperator.Minus, // We need a default value
                 },
+                .reference = operator.pos,
             };
             ret.* = ast.Value{ .binaryOperator = operation };
             return ret;
@@ -351,7 +395,7 @@ pub fn lexeValue2(reader: *tokenReader, allocator: Allocator) (lexerError || std
         return lhs;
     switch ((try reader.peek()).type) {
         TokenType.DBL_EQUAL, TokenType.NOT_EQUAL, TokenType.LESS_THAN, TokenType.MORE_THAN, TokenType.MORE_THAN_EQ, TokenType.LESS_THAN_EQ => |optype| {
-            _ = reader.consume(optype);
+            const operator = reader.consume(optype);
             const rhs = try lexeValue2(reader, allocator);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.binaryOperation);
@@ -367,6 +411,7 @@ pub fn lexeValue2(reader: *tokenReader, allocator: Allocator) (lexerError || std
                     TokenType.LESS_THAN_EQ => ast.binOperator.Le,
                     else => ast.binOperator.Equal,
                 },
+                .reference = operator.pos,
             };
             ret.* = ast.Value{ .binaryOperator = operation };
             return ret;
@@ -385,10 +430,10 @@ pub fn lexeValue1(reader: *tokenReader, allocator: Allocator) !*ast.Value {
         return lhs;
     switch ((try reader.peek()).type) {
         TokenType.QUEST => |optype| {
-            _ = reader.consume(optype);
+            const operator = reader.consume(optype);
 
             const error_name = reader.consume(TokenType.IDENT).value;
-            const scope = try lexeScope(reader, allocator);
+            const scope = try lexeValue0(reader, allocator);
 
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.ErrCheck);
@@ -396,6 +441,7 @@ pub fn lexeValue1(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                 .err = error_name,
                 .scope = scope,
                 .value = lhs,
+                .reference = operator.pos,
             };
 
             ret.* = ast.Value{ .errorCheck = operation };
@@ -414,11 +460,15 @@ pub fn lexeValue0(reader: *tokenReader, allocator: Allocator) (lexerError || std
     //  | value1
     const lhs = try lexeValue1(reader, allocator);
     if (reader.canPeek() and (try reader.peek()).type == TokenType.EQUAL) {
-        _ = reader.consume(TokenType.EQUAL);
+        const assignation_op = reader.consume(TokenType.EQUAL);
         const rhs = try lexeValue0(reader, allocator);
         const ret = try allocator.create(ast.Value);
         const assignement = try allocator.create(ast.Assignement);
-        assignement.* = ast.Assignement{ .lhs = lhs, .rhs = rhs };
+        assignement.* = ast.Assignement{
+            .lhs = lhs,
+            .rhs = rhs,
+            .reference = assignation_op.pos,
+        };
         ret.* = ast.Value{ .assignement = assignement };
         return ret;
     }
@@ -432,7 +482,7 @@ pub fn lexeScope(reader: *tokenReader, allocator: Allocator) !*ast.Scope {
     //      { values * }
 
     // Consume opening {
-    _ = reader.consume(TokenType.O_CUR);
+    const ocur = reader.consume(TokenType.O_CUR);
 
     var values = ArrayList(*ast.Value).init(allocator);
     while (reader.canPeek() and (try reader.peek()).type != TokenType.C_CUR) {
@@ -440,7 +490,7 @@ pub fn lexeScope(reader: *tokenReader, allocator: Allocator) !*ast.Scope {
     }
     _ = reader.consume(TokenType.C_CUR);
 
-    const ret = try ast.Scope.init(values, allocator);
+    const ret = try ast.Scope.init(values, ocur.pos, allocator);
     return ret;
 }
 
@@ -456,6 +506,7 @@ pub fn lexeArguments(reader: *tokenReader, allocator: Allocator) !ArrayList(*ast
             const arg = try allocator.create(ast.Arguments);
             arg.name = arg_name.value;
             arg._type = argtype;
+            arg.reference = arg_name.pos;
             try args.append(arg);
 
             if ((try reader.peek()).type != TokenType.COMMA)
@@ -498,12 +549,14 @@ pub fn lexeTypeParametrisation(reader: *tokenReader, allocator: Allocator) !Arra
             try ret.append(.{
                 .name = name.value,
                 .traits = traits,
+                .reference = name.pos,
             });
         } else {
             // No traits specified
             try ret.append(.{
                 .name = name.value,
                 .traits = ArrayList([]const u8).init(allocator),
+                .reference = name.pos,
             });
         }
         if (reader.canPeek() and (try reader.peek()).type != .COMMA) {
@@ -540,6 +593,7 @@ pub fn lexeFuncdef(reader: *tokenReader, allocator: Allocator) !*ast.funcDef {
         .return_type = rettype,
         .code = scope,
         .typeparam = type_param,
+        .reference = name.pos,
     };
     return ret;
 }

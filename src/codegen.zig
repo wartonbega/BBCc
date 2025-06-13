@@ -53,7 +53,7 @@ const Context = struct {
         } else {
             try self.labels.put(base, count);
         }
-        return try std.fmt.allocPrint(self.allocator, "{s}_{d}", .{ base, count });
+        return try std.fmt.allocPrint(self.allocator, "autogen@{s}_{d}", .{ base, count });
     }
 };
 
@@ -239,15 +239,15 @@ pub fn loadRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
 
 pub fn generateValueAssignement(value: *const Ast.Value, scopeCtx: *ScopeContext) Inst.Location {
     return switch (value.*) {
-        .identifier => |ident| return scopeCtx.getVariable(ident),
+        .identifier => |ident| return scopeCtx.getVariable(ident.name),
         .varDec => |vardec| return scopeCtx.getVariable(vardec.name),
         else => Inst.Location{ .void = {} },
     };
 }
 
-pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeContext, ctx: *Context, no_err_jmp: bool) !Inst.Location {
-    const lhs_loc = try generateValue(binop.lhs, scopeCtx, ctx, no_err_jmp);
-    const rhs_loc = try generateValue(binop.rhs, scopeCtx, ctx, no_err_jmp);
+pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeContext, ctx: *Context) !Inst.Location {
+    const lhs_loc = try generateValue(binop.lhs, scopeCtx, ctx);
+    const rhs_loc = try generateValue(binop.rhs, scopeCtx, ctx);
     const lhs_type = getCompileType((try bbcTypes.getTypeOfValue(binop.lhs, scopeCtx.context, ctx.allocator)).decided, scopeCtx.version);
     const rhs_type = getCompileType((try bbcTypes.getTypeOfValue(binop.rhs, scopeCtx.context, ctx.allocator)).decided, scopeCtx.version);
     // Assuming lhs and rhs have decided types and both can't be functions (eliminated option in the analyser)
@@ -283,31 +283,31 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
     return chooseWiselyLocation(ctx, scopeCtx);
 }
 
-pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Context, no_err_jmp: bool) Allocator.Error!Inst.Location {
+pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Context) Allocator.Error!Inst.Location {
     defer {
         var defer_err_type = Ast.Type{ .base = Ast.TypeBase{ .name = "Int" }, .err = false, .references = 0 };
         const eval_type = bbcTypes.getTypeOfValue(@constCast(value), scopeCtx.context, ctx.allocator) catch blk: {
             break :blk bbcTypes.Type{ .decided = &defer_err_type };
         };
         const comp_type = getCompileType(eval_type.decided, scopeCtx.version);
-        if (comp_type.hasError() and !no_err_jmp)
+        if (comp_type.hasError())
             ctx.builder.conditionalJump(Inst.Location{ .label = &error_union_label.* }, &error_union_function.*) catch {};
     }
     switch (value.*) {
         .intLit => |intlit| {
             const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
-            try ctx.builder.intLit(@intCast(intlit), dest);
+            try ctx.builder.intLit(@intCast(intlit.value), dest);
             return dest;
         },
         .boolLit => |boollit| {
             const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
-            try ctx.builder.charLit(if (boollit) 1 else 0, dest);
+            try ctx.builder.charLit(if (boollit.value) 1 else 0, dest);
             return dest;
         },
         .identifier => |ident| {
             // We move the value idealy to one of the registers, but otherwise on the stack
-            const origin = scopeCtx.getVariable(ident);
-            const _type = scopeCtx.context.getVariable(ident).decided;
+            const origin = scopeCtx.getVariable(ident.name);
+            const _type = scopeCtx.context.getVariable(ident.name).decided;
             if (_type.base == .function)
                 return origin;
             const compile_type = getCompileType(_type, scopeCtx.version);
@@ -319,7 +319,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
         },
         .assignement => |assign| {
             // "dest = origin"
-            const origin = try generateValue(assign.rhs, scopeCtx, ctx, no_err_jmp);
+            const origin = try generateValue(assign.rhs, scopeCtx, ctx);
             const dest = generateValueAssignement(assign.lhs, scopeCtx);
             const compile_type = getCompileType(
                 (try bbcTypes.getTypeOfValue(assign.rhs, scopeCtx.context, ctx.allocator)).decided,
@@ -336,7 +336,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             return try generateScope(scope, scopeCtx, ctx);
         },
         .funcall => |funcall| {
-            var func = try generateValue(funcall.func, scopeCtx, ctx, no_err_jmp);
+            var func = try generateValue(funcall.func, scopeCtx, ctx);
             const functype = (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided.base.function;
             // creating the local version
             var func_version = std.hash_map.StringHashMap(bbcTypes.Type).init(ctx.allocator);
@@ -364,7 +364,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
 
             var args = Arraylist(Inst.Location).init(ctx.allocator);
             for (funcall.args.items) |arg| {
-                const base_arg = try generateValue(arg, scopeCtx, ctx, no_err_jmp);
+                const base_arg = try generateValue(arg, scopeCtx, ctx);
                 const arg_compile_type = getCompileType(
                     (try bbcTypes.getTypeOfValue(arg, scopeCtx.context, ctx.allocator)).decided,
                     scopeCtx.version,
@@ -398,17 +398,22 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             );
             const retloc = try pickWiselyLocation(ctx, scopeCtx, ret_compile_type);
             try ctx.builder.moveInst(.{ .register = Inst.Registers.r0 }, retloc, ret_compile_type);
-
             //try loadRegistersFuncall(ctx, scopeCtx);
 
-            for (args.items) |arg| {
-                try freeLocation(arg, scopeCtx, ctx);
+            for (0..funcall.args.items.len) |i_arg| {
+                const arg_compile_type = getCompileType(
+                    (try bbcTypes.getTypeOfValue(funcall.args.items[funcall.args.items.len - 1 - i_arg], scopeCtx.context, ctx.allocator)).decided,
+                    scopeCtx.version,
+                );
+                try ctx.builder.decreaseStack(arg_compile_type);
+                _ = scopeCtx.simstack.pop().?;
             }
-            try freeLocation(func_stack_lock, scopeCtx, ctx);
+            try ctx.builder.decreaseStack(Inst.Type{ .pointer = false });
+            _ = scopeCtx.simstack.pop().?;
             return retloc;
         },
         .binaryOperator => |binop| {
-            return try generateBinOperation(binop, scopeCtx, ctx, no_err_jmp);
+            return try generateBinOperation(binop, scopeCtx, ctx);
         },
         .stringLit => |stringlit| {
             // Add the amout of memory on the stack ( len(stringlit) + (8 - len(stringlit)%8) + 8 )
@@ -417,7 +422,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             // String_stack_size is only the size of the string itself
             // Memory layout :  | __SIZE__ | __STRING_LIT...__ |
             //                  |    8     |        ...        |
-            const string_stack_size = stringlit.len + 8 - (stringlit.len % 8);
+            const string_stack_size = stringlit.value.len + 8 - (stringlit.value.len % 8);
 
             try scopeCtx.simstack.append(Inst.Type{ .arrayLike = false });
             try ctx.builder.reserveStack(@intCast(string_stack_size + 8));
@@ -434,7 +439,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             try ctx.builder.getStackPointer(ret_loc);
 
             // Then write the rest of the string
-            for (stringlit, 0..) |char, idx| {
+            for (stringlit.value, 0..) |char, idx| {
                 const char_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .charType = false });
                 try ctx.builder.charLit(char, char_loc);
                 try ctx.builder.writeArrayElement(ret_loc, idx, char_loc, Inst.Type{ .charType = false });
@@ -451,10 +456,10 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             // We can generate each scope one by one
             for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
                 const next_label = try ctx.generateLabel("ifstmt_cond");
-                const _test = try generateValue(cond, scopeCtx, ctx, no_err_jmp);
+                const _test = try generateValue(cond, scopeCtx, ctx);
                 try ctx.builder.not(_test);
                 try ctx.builder.conditionalJump(_test, next_label);
-                const scope_ret_loc = try generateValue(scope, scopeCtx, ctx, no_err_jmp);
+                const scope_ret_loc = try generateValue(scope, scopeCtx, ctx);
                 if (compile_type != .voidType)
                     try ctx.builder.moveInst(scope_ret_loc, ret_loc, compile_type);
                 try ctx.builder.jump(end_label);
@@ -463,7 +468,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
 
             // Then if it exists, the else statement
             if (ifstmt.elsescope) |else_scope| {
-                const else_scope_ret_loc = try generateValue(else_scope, scopeCtx, ctx, no_err_jmp);
+                const else_scope_ret_loc = try generateValue(else_scope, scopeCtx, ctx);
                 if (compile_type != .voidType)
                     try ctx.builder.moveInst(else_scope_ret_loc, ret_loc, compile_type);
             }
@@ -471,36 +476,66 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             return ret_loc;
         },
         .parenthesis => |val| {
-            return try generateValue(val, scopeCtx, ctx, no_err_jmp);
+            return try generateValue(val, scopeCtx, ctx);
         },
         .errorCheck => |errcheck| {
-            const default_label = try ctx.generateLabel("error_checking");
-            const ret = try generateValue(errcheck.value, scopeCtx, ctx, true);
-            // Compile type with no error union
-            const compile_type = getCompileType((try bbcTypes.getTypeOfScope(errcheck.scope, scopeCtx.context, ctx.allocator)).decided, scopeCtx.version);
-            const val_err = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
-            try ctx.builder.load(Inst.Location{ .label = &error_union_label.* }, val_err);
-            try ctx.builder.comment("test");
-            try ctx.builder.not(val_err);
-            try ctx.builder.conditionalJump(val_err, default_label);
-            const scope_ret = try generateScope(errcheck.scope, scopeCtx, ctx);
-            try ctx.builder.moveInst(scope_ret, ret, compile_type);
-            // creating a zero
-            const zero_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
-            try ctx.builder.intLit(0, zero_loc);
-            // and moving it in the error flag
-            try ctx.builder.moveInst(zero_loc, Inst.Location{ .label = &error_union_label.* }, compile_type);
-            try ctx.builder.labelDec(default_label);
-            return ret;
+            // Principle of the compilation
+            // We create a pseudo-function that we call, if there's an error, the functions returns
+            // otherwise the function continues normally:
+            // Layout
+            //      ...
+            //      call function
+            //      ;; here the function has returned => error
+            //      move and evaluate the scope value
+            //      jump to end
+            //   function:
+            //      do what the error-unioned code do
+            //      and put it in the right spot
+            //   end:
+            //      ...
+            // there's no need of actually creating the pseudo-function, just the label in sufficient
+
+            const pseudo_func = try ctx.generateLabel("error_checking");
+            const end_label = try ctx.generateLabel("error_check_end");
+
+            const eval_type = try bbcTypes.getTypeOfValue(errcheck.value, scopeCtx.context, ctx.allocator);
+            const comp_type = getCompileType(eval_type.decided, scopeCtx.version);
+            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, comp_type);
+
+            try ctx.builder.funcall(Inst.Location{ .label = pseudo_func }, .init(ctx.allocator));
+
+            // Generating the default value if there's an error
+            const scope_loc = try generateValue(errcheck.scope, scopeCtx, ctx);
+            try ctx.builder.moveInst(scope_loc, ret_loc, comp_type);
+            try freeLocation(scope_loc, scopeCtx, ctx); // We can free this location, not needed
+            try ctx.builder.jump(end_label);
+
+            try ctx.builder.labelDec(pseudo_func);
+            try ctx.builder.beginFunction();
+            try scopeCtx.simstack.append(.{ .pointer = false }); // Pushing a pointer because of the function call
+
+            // The original value, that may return with an error (in that case it jumps back to the funcall)
+            const value_loc = try generateValue(errcheck.value, scopeCtx, ctx);
+            try ctx.builder.moveInst(value_loc, ret_loc, comp_type);
+            try freeLocation(value_loc, scopeCtx, ctx); // We can free this location, not needed
+            // We can remove the function from the top of the stack
+            try ctx.builder.endFunction();
+            _ = scopeCtx.simstack.pop();
+            try ctx.builder.decreaseStack(Inst.Type{ .pointer = false });
+
+            // End label
+            try ctx.builder.labelDec(end_label);
+
+            return ret_loc;
         },
         .While => |whileloop| {
             const w_begin = try ctx.generateLabel("while_begin");
             const w_end = try ctx.generateLabel("while_end");
             try ctx.builder.labelDec(w_begin);
-            const cond = try generateValue(whileloop.condition, scopeCtx, ctx, no_err_jmp);
+            const cond = try generateValue(whileloop.condition, scopeCtx, ctx);
             try ctx.builder.not(cond);
             try ctx.builder.conditionalJump(cond, w_end);
-            _ = try generateValue(whileloop.exec, scopeCtx, ctx, no_err_jmp);
+            _ = try generateValue(whileloop.exec, scopeCtx, ctx);
             try ctx.builder.jump(w_begin);
             try ctx.builder.labelDec(w_end);
             return Inst.Location{ .void = {} };
@@ -550,11 +585,11 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
         //  const valtype = getCompileType((try bbcTypes.getTypeOfValue(value, scopeCtx.context, ctx.allocator)).decided, newScopeCtx.version);
         try ctx.builder.comment("Instruction");
 
-        _ = try generateValue(value, newScopeCtx, ctx, false);
+        _ = try generateValue(value, newScopeCtx, ctx);
     }
 
     try ctx.builder.comment("Return value of scope");
-    const ret = try generateValue(scope.code.getLast(), newScopeCtx, ctx, false);
+    const ret = try generateValue(scope.code.getLast(), newScopeCtx, ctx);
     while (newScopeCtx.simstack.items.len - init_stack_size > 0) {
         try ctx.builder.decreaseStack(newScopeCtx.simstack.pop().?);
     }
