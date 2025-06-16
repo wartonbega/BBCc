@@ -26,6 +26,10 @@ const Context = struct {
         version: analyser.functionVersion,
     }),
     labels: std.hash_map.StringHashMap(usize), // General purpose label (if statements, loops, etc)
+    dec_strings: Arraylist(struct {
+        name: []const u8,
+        content: []const u8,
+    }),
 
     pub fn getUid(self: *Context, version: analyser.functionVersion) []const u8 {
         base_for: for (self.func_uid_list.items) |func| {
@@ -267,9 +271,15 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
             .Gt => try ctx.builder.greaterThan(lhs_loc, rhs_loc),
             .Ge => try ctx.builder.greaterEqual(lhs_loc, rhs_loc),
             .Div => { // Div can return an error
-                try ctx.builder.divide(lhs_loc, rhs_loc);
+                const div_label = try ctx.generateLabel("div");
+                const div_err_label = try ctx.generateLabel("div_err");
+                try ctx.builder.conditionalJump(rhs_loc, div_label);
                 try ctx.builder.intLit(1, .{ .register = .r0 });
                 try ctx.builder.moveInst(Inst.Location{ .register = .r0 }, .{ .label = &error_union_label.* }, .{ .intType = false });
+                try ctx.builder.jump(div_err_label); // Avoid division by zero
+                try ctx.builder.labelDec(div_label);
+                try ctx.builder.divide(lhs_loc, rhs_loc);
+                try ctx.builder.labelDec(div_err_label);
             },
             else => unreachable,
         }
@@ -422,29 +432,36 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             // String_stack_size is only the size of the string itself
             // Memory layout :  | __SIZE__ | __STRING_LIT...__ |
             //                  |    8     |        ...        |
-            const string_stack_size = stringlit.value.len + 8 - (stringlit.value.len % 8);
-
-            try scopeCtx.simstack.append(Inst.Type{ .arrayLike = false });
-            try ctx.builder.reserveStack(@intCast(string_stack_size + 8));
-
-            // We write the size on the stack
-            try ctx.builder.intLit(@intCast(string_stack_size), Inst.Location{
-                .stack = .{
-                    .idx = scopeCtx.getCurrentStackIndex(),
-                    .stack_state = scopeCtx.getCurrentStackState(),
-                },
+            //const string_stack_size = stringlit.value.len + 8 - (stringlit.value.len % 8);
+            //
+            //try scopeCtx.simstack.append(Inst.Type{ .arrayLike = false });
+            //try ctx.builder.reserveStack(@intCast(string_stack_size + 8));
+            //
+            //// We write the size on the stack
+            //try ctx.builder.intLit(@intCast(string_stack_size), Inst.Location{
+            //    .stack = .{
+            //        .idx = scopeCtx.getCurrentStackIndex(),
+            //        .stack_state = scopeCtx.getCurrentStackState(),
+            //    },
+            //});
+            //
+            //const ret_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .pointer = false });
+            //try ctx.builder.getStackPointer(ret_loc);
+            //
+            //// Then write the rest of the string
+            //for (stringlit.value, 0..) |char, idx| {
+            //    const char_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .charType = false });
+            //    try ctx.builder.charLit(char, char_loc);
+            //    try ctx.builder.writeArrayElement(ret_loc, idx, char_loc, Inst.Type{ .charType = false });
+            //    try freeLocation(char_loc, scopeCtx, ctx);
+            //}
+            const string_name = try ctx.generateLabel("stringlit");
+            try ctx.dec_strings.append(.{
+                .content = stringlit.value,
+                .name = string_name,
             });
-
             const ret_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .pointer = false });
-            try ctx.builder.getStackPointer(ret_loc);
-
-            // Then write the rest of the string
-            for (stringlit.value, 0..) |char, idx| {
-                const char_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .charType = false });
-                try ctx.builder.charLit(char, char_loc);
-                try ctx.builder.writeArrayElement(ret_loc, idx, char_loc, Inst.Type{ .charType = false });
-                try freeLocation(char_loc, scopeCtx, ctx);
-            }
+            try ctx.builder.moveInst(.{ .label = string_name }, ret_loc, Inst.Type{ .pointer = false });
             try ctx.builder.print(ret_loc);
             return ret_loc;
         },
@@ -649,6 +666,7 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
         .func_id_table_counter = std.hash_map.StringHashMap(usize).init(alloc),
         .func_uid_list = .init(alloc),
         .labels = .init(alloc),
+        .dec_strings = .init(alloc),
     };
 
     var functions_uid = Arraylist([]const u8).init(alloc);
@@ -686,8 +704,23 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
     try ctx.builder.beginVariableSection();
     // content: []const (struct{size:usize, content:[]const u8})
     var contents_data = Inst.varContentType.init(alloc);
-    try contents_data.append(.{ .content = "0", .size = 8 });
+    try contents_data.append(.{ .content = 0, .size = 8 });
     try ctx.builder.declareVariable(&error_union_label.*, &contents_data);
+
+    for (ctx.dec_strings.items) |string| {
+        var content = Inst.varContentType.init(ctx.allocator);
+        try content.append(.{
+            .content = @intCast(string.content.len),
+            .size = 8,
+        });
+        for (0..string.content.len) |i_char| {
+            try content.append(.{
+                .content = string.content[i_char],
+                .size = 1,
+            });
+        }
+        try ctx.builder.declareVariable(string.name, &content);
+    }
 
     return ctx.builder;
 }

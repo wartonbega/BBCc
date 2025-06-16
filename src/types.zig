@@ -533,7 +533,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         },
         .parenthesis => |val| try inferTypeValue(val, ctx, allocator, expType),
         .errorCheck => |errcheck| {
-            try inferTypeValue(errcheck.value, ctx, allocator, expType);
+            try inferTypeValue(errcheck.value, ctx, allocator, try duplicateWithErrorUnion(allocator, expType.decided, true));
             try inferTypeValue(errcheck.scope, ctx, allocator, expType);
         },
         .While => |whileloop| {

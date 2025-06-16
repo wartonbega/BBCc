@@ -108,7 +108,7 @@ pub fn isAlloced(t: Type) bool {
 
 pub const varContentType = std.ArrayList(struct {
     size: usize,
-    content: []const u8,
+    content: u32,
 });
 
 pub const Instructions = union(enum) {

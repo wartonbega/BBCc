@@ -280,12 +280,18 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 }
             },
             .beginVariableSection => {
-                try writer.print("\nsection .bss\n", .{});
+                try writer.print("\nsection .data\n", .{});
             },
             .declareVariable => |_var| {
                 try writer.print("{s}:\n", .{_var.name});
                 for (_var.content.items) |cont| {
-                    try writer.print("\t{s} 1\n", .{if (cont.size == 8) "resq" else "YEET"});
+                    try writer.print("\t{s} {d}\n", .{ switch (cont.size) {
+                        8 => "dq",
+                        4 => "dd",
+                        2 => "yeet",
+                        1 => "db",
+                        else => "yeet",
+                    }, cont.content });
                 }
             },
             .ConditionalJump => |inst| {
