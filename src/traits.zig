@@ -329,6 +329,13 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             try traitUnion(&ret, &try getTypeTraits(whileloop.condition, ctx, allocator));
             try traitUnion(&ret, &try getTypeTraits(whileloop.exec, ctx, allocator));
         },
+
+        .structInit => |stc_init| {
+            var stc_hab_it = stc_init.habitants.iterator();
+            while (stc_hab_it.next()) |hab| {
+                try traitUnion(&ret, &try getTypeTraits(hab.value_ptr.*, ctx, allocator));
+            }
+        },
         else => {
             std.debug.print("Unimplemented {}", .{instruction});
             unreachable;

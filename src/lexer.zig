@@ -105,6 +105,7 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     //  | WHILE value0 value0
     //  | LET ident
     //  | ident
+    //  | @ ident? {( value0 ,)*}
     //  | "stringlit" [TODO]
     //  | 'c' (charlit)
     //  | intlit
@@ -181,6 +182,34 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                 .name = name.value,
                 .reference = name.pos,
             } };
+            return ret;
+        },
+        TokenType.AT => { // Struct usage
+            const at_op = reader.consume(TokenType.AT);
+
+            const ret = try allocator.create(ast.Value);
+
+            const stc_init = try allocator.create(ast.StructInit);
+            ret.* = ast.Value{ .structInit = stc_init };
+            stc_init.habitants = .init(allocator);
+            stc_init.reference = at_op.pos;
+
+            ret.structInit = stc_init;
+            // The name is optionnal
+            const stc_name = if (reader.canPeek() and (try reader.peek()).type == .IDENT) reader.consume(.IDENT).value else @as([]const u8, "");
+            stc_init.name = stc_name;
+
+            _ = reader.consume(.O_CUR);
+            while ((reader.canPeek()) and (try reader.peek()).type != .C_CUR) {
+                // {a = 1, b = 2 ...}
+                const name = reader.consume(.IDENT);
+                _ = reader.consume(.EQUAL);
+                const hab = try lexeValue0(reader, allocator);
+                try stc_init.habitants.put(name.value, hab);
+                if (reader.canPeek() and (try reader.peek()).type != .C_CUR)
+                    _ = reader.consume(.COMMA);
+            }
+            _ = reader.consume(.C_CUR);
             return ret;
         },
         TokenType.INTLIT => {
@@ -598,6 +627,31 @@ pub fn lexeFuncdef(reader: *tokenReader, allocator: Allocator) !*ast.funcDef {
     return ret;
 }
 
+pub fn lexeStructDef(reader: *tokenReader, allocator: Allocator) !*ast.structDef {
+    // Struct def:
+    // struct name { (Type name)* }
+    const struct_keyword = reader.consume(.STRUCT); // func keyword
+
+    const st_name = reader.consume(.IDENT);
+
+    _ = reader.consume(.O_CUR);
+
+    const ret = try allocator.create(ast.structDef);
+    ret.habitants = std.hash_map.StringHashMap(*ast.Type).init(allocator);
+    ret.reference = struct_keyword.pos;
+    ret.name = st_name.value;
+
+    while ((reader.canPeek()) and (try reader.peek()).type != .C_CUR) {
+        const ttype = try lexeType(reader, allocator);
+        const name = reader.consume(.IDENT);
+        try ret.habitants.put(name.value, ttype);
+        if (reader.canPeek() and (try reader.peek()).type != .C_CUR)
+            _ = reader.consume(.COMMA);
+    }
+    _ = reader.consume(.C_CUR);
+    return ret;
+}
+
 pub fn lexeProgram(tokens: ArrayList(parser.Token), allocator: Allocator) !*ast.Program {
     // Program:
     //   | FUNC name ( args* ) retype {code}
@@ -611,6 +665,11 @@ pub fn lexeProgram(tokens: ArrayList(parser.Token), allocator: Allocator) !*ast.
                 const fndef = try allocator.create(ast.ProgInstructions);
                 fndef.* = ast.ProgInstructions{ .FuncDef = try lexeFuncdef(&reader, allocator) };
                 try ret.instructions.append(fndef);
+            },
+            TokenType.STRUCT => {
+                const structdef = try allocator.create(ast.ProgInstructions);
+                structdef.* = ast.ProgInstructions{ .StructDef = try lexeStructDef(&reader, allocator) };
+                try ret.instructions.append(structdef);
             },
             else => {
                 errors.bbcErrorExit("Unexpected token {}", .{token.type}, token.pos);

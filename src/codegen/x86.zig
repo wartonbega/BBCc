@@ -56,22 +56,9 @@ const isAlloced = Inst.isAlloced;
 fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
     switch (loc) {
         .stack => |d| {
-            var size_accumulator: i64 = @intCast(0);
-            try writer.print("\txor r15, r15\n", .{});
-            for (d.idx..d.stack_state.items.len) |i| {
-                const ttype = d.stack_state.items[d.stack_state.items.len - (i - d.idx) - 1];
-                if (isAlloced(ttype)) {
-                    if (size_accumulator != 0)
-                        try writer.print("\tadd r15, {d}\n", .{size_accumulator});
-
-                    try writer.print("\tadd r15, qword [rsp + r15]\n", .{});
-                    size_accumulator = 8; // The size from the fat-pointer
-                } else {
-                    size_accumulator += Inst.getCompileSize(ttype);
-                }
-            }
-            if (size_accumulator != 0)
-                try writer.print("\tadd r15, {d}\n", .{size_accumulator});
+            // place in r15 the stack location of the value
+            try writer.print("\tmov r15, -{d}\n", .{d + 1});
+            try writer.print("\tlea r15, [8 * r15]\n", .{});
 
             return true;
         },
@@ -79,6 +66,12 @@ fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
         .label => |l| {
             try writer.print("\tlea r15, {s}\n", .{l});
             return true;
+        },
+        .argument => |arg| {
+            if (arg >= 6) {
+                try writer.print("\tmov r15, {d}\n", .{(arg - 6 + 2) * 8});
+                return true;
+            }
         },
         .void => unreachable,
     }
@@ -88,8 +81,23 @@ fn prepareForLoc(writer: FileWriter, loc: Inst.Location) !bool {
 fn dumpLocation(loc: Inst.Location, size: i64) []const u8 {
     return switch (loc) {
         .register => |_r| reg(_r, size),
-        .stack => "qword [rsp + r15]",
+        .stack => "qword [rbp + r15]",
         .label => "qword [r15]",
+        .argument => |arg| {
+            // arguments:
+            //      rsi, rdi, rcx, rdx, r8, r9, stack + 0, stack + 1, stack + 2 ...
+            //      0    1    2    3    4   5   6          7          8         ...
+            // However because of the calling convention, rbp is saved on the stack as well as the return address
+            // and there's a additionnal 8 + 8 = 16 bytes that should be added
+            //      stack: | ...arguments...  |  function return address  |  rbp  | ....
+            //                                                                    ^_rbp
+            // and rbp points to the top of the stack
+            if (arg < 6) {
+                return ([6][]const u8{ "rsi", "rdi", "rcx", "rdx", "r8", "r9" })[arg];
+            }
+            // The location has been prepared, r15 contains rpb and the amount of shift needed
+            return "qword [rbp + r15]";
+        },
         .void => unreachable,
     };
 }
@@ -104,7 +112,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
     const writer = file.writer();
 
     //_ = try writer.write("%macro LOAD_ADDRESS 2\n\tadrp %1, %2@PAGE\n\tadd  %1, %1, %2@PAGEOFF\n%endmacro\n");
-    _ = try writer.print("default rel\nsection .text align=8\n\tglobal {s}\n", .{entry_point});
+    _ = try writer.print("default rel\nsection .text align=16\n\tglobal {s}\nextern _malloc\n", .{entry_point});
     for (builder.code.items) |instruction| {
         switch (instruction) {
             //.Plus => |inst| writer.writeAll("\tPlus({}, {})\n"),
@@ -113,10 +121,12 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 try writer.print("\n{s}:\n", .{fname});
             },
             .BeginFunction => {
+                // At the beggining of the function, first instructions
                 try writer.print("\tpush rbp\n", .{});
                 try writer.print("\tmov rbp, rsp\n", .{});
             },
             .EndFunction => {
+                // At the end of the function, last instructions
                 try writer.print("\tmov rsp, rbp \n", .{});
                 try writer.print("\tpop rbp\n", .{});
             },
@@ -268,15 +278,34 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 });
             },
             .Funcall => |funcall| {
-                for (funcall.args.items, Inst.RegIter[0..funcall.args.items.len]) |arg, destreg| {
+                // first thing : we push the current
+
+                // x86 calling convention :
+                // registers rcx -> r9 used for the first arguments then everything else on the stack
+                // rsi, rdi, rcx, rdx, r8, r9, stack, stack + 1, stack + 2...
+                const registers: [6][]const u8 = .{ "rsi", "rdi", "rcx", "rdx", "r8", "r9" };
+
+                // Because of the codegen, all the arguments are on the stack
+                // in the reverse order (last one on the top)
+                for (funcall.args.items, 0..) |arg, idx| {
                     _ = try prepareForLoc(writer, arg);
-                    try writer.print("\tmov {s}, {s}\n", .{ reg(destreg, 8), dumpLocation(arg, 8) });
+                    if (idx < 6) {
+                        try writer.print("\tmov {s}, {s}\n", .{ registers[idx], dumpLocation(arg, 8) });
+                    } else {
+                        try writer.print("\tpush {s}\n", .{dumpLocation(arg, 8)});
+                    }
                 }
                 if (funcall.func == .label) {
                     try writer.print("\tcall {s}\n", .{funcall.func.label});
                 } else {
                     _ = try prepareForLoc(writer, funcall.func);
                     try writer.print("\tcall {s}\n", .{dumpLocation(funcall.func, 8)});
+                }
+                for (funcall.args.items, 0..) |arg, idx| {
+                    _ = try prepareForLoc(writer, arg);
+                    if (idx >= 6) {
+                        try writer.print("\tpop\n", .{});
+                    }
                 }
             },
             .beginVariableSection => {

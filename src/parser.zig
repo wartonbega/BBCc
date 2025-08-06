@@ -21,6 +21,7 @@ pub const TokenType = enum {
     EXCLAM, // !
     QUEST, // ?
     ARROW, // ->
+    AT, // @
 
     // Keywords
     FN_DEC, // 'fn'
@@ -30,6 +31,8 @@ pub const TokenType = enum {
     ELSE,
     WHILE,
     FOR,
+    STRUCT,
+    ENUM,
 
     IDENT, // identifier
     INTLIT, // Integer literal
@@ -86,6 +89,12 @@ fn getIdentType(ident: []const u8) TokenType {
     if (std.mem.eql(u8, ident, "false")) {
         return TokenType.FALSE;
     }
+    if (std.mem.eql(u8, ident, "struct")) {
+        return TokenType.STRUCT;
+    }
+    if (std.mem.eql(u8, ident, "enum")) {
+        return TokenType.ENUM;
+    }
     return TokenType.IDENT;
 }
 
@@ -121,6 +130,7 @@ fn isDirOperator(char: u8) bool {
         char == '<' or
         char == '>' or
         char == '!' or
+        char == '@' or
         char == '.';
 }
 
@@ -250,6 +260,11 @@ fn parseString(reader: *Reader, allocator: std.mem.Allocator) !Token {
     return .{ .type = TokenType.STRINGLIT, .value = ret, .pos = try reader.getCurrentPosition(allocator) };
 }
 
+fn ignoreLineComment(reader: *Reader) void {
+    // the two first '//'
+    while (reader.consume(1)[0] != '\n') {}
+}
+
 fn parseOperator(reader: *Reader, allocator: std.mem.Allocator) !Token {
     // 2-char long operators :
     // -> == <= >= ...
@@ -287,6 +302,7 @@ fn parseOperator(reader: *Reader, allocator: std.mem.Allocator) !Token {
             '>' => Token{ .type = TokenType.MORE_THAN, .value = ">", .pos = try reader.getCurrentPosition(allocator) },
             '<' => Token{ .type = TokenType.LESS_THAN, .value = "<", .pos = try reader.getCurrentPosition(allocator) },
             '!' => Token{ .type = TokenType.EXCLAM, .value = "!", .pos = try reader.getCurrentPosition(allocator) },
+            '@' => Token{ .type = TokenType.AT, .value = "@", .pos = try reader.getCurrentPosition(allocator) },
             else => parser_error.UnknownOperator,
         };
         _ = reader.consume(1);
@@ -311,7 +327,9 @@ pub fn parse(filename: []const u8, arena: *std.heap.ArenaAllocator) !std.ArrayLi
 
         // Otherwise, we can read the first character
         const char = reader.peek(1)[0];
-        if (isNumeric(char)) {
+        if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "//")) { // line comment
+            ignoreLineComment(&reader);
+        } else if (isNumeric(char)) {
             try tokens.append(try parseIntegerLiteral(&reader, allocator));
         } else if (isAlpha(char)) {
             try tokens.append(try parseIdentifier(&reader, allocator));

@@ -6,7 +6,7 @@ run_arm: a.out
 	arch -x86_64 ./a.out || (echo "\noutput: $$?"; exit 0)
 
 a.out: output.o
-	clang output.o -o a.out -e main_wrapper -m64 -arch x86_64
+	clang output.o -o a.out -e main_wrapper -m64 -arch x86_64 -lc
 
 output.o: output.asm
 	nasm -f macho64 output.asm -o output.o -g

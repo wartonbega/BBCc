@@ -33,14 +33,18 @@ const Context = struct {
 
     pub fn getUid(self: *Context, version: analyser.functionVersion) []const u8 {
         base_for: for (self.func_uid_list.items) |func| {
+            std.debug.print("-->#{s}\n", .{func.version.name});
             if (std.mem.eql(u8, func.version.name, version.name)) {
                 if (func.version.version.count() != version.version.count())
                     continue;
                 var it = func.version.version.iterator();
                 while (it.next()) |vers| {
+                    std.debug.print("-->({s}\n", .{vers.key_ptr.*});
                     if (!version.version.contains(vers.key_ptr.*))
                         continue :base_for;
-                    if (!version.version.get(vers.key_ptr.*).?.matchType(vers.value_ptr.*))
+                    const arg_type = version.version.get(vers.key_ptr.*).?;
+                    std.debug.print("-->({s}\n", .{arg_type.toString(self.allocator)});
+                    if (!arg_type.matchType(vers.value_ptr.*))
                         continue :base_for;
                 }
                 return func.uid;
@@ -76,12 +80,7 @@ const ScopeContext = struct {
     pub fn getVariable(self: *const ScopeContext, name: []const u8) Inst.Location {
         const loc = self.vars.get(name).?;
         switch (loc) {
-            .stack => |s| {
-                return Inst.Location{ .stack = .{
-                    .idx = s.idx,
-                    .stack_state = self.getCurrentStackState(),
-                } };
-            },
+            .stack => return loc,
             .label => return loc,
             else => unreachable,
         }
@@ -91,12 +90,6 @@ const ScopeContext = struct {
 
     pub fn getCurrentStackIndex(self: *const ScopeContext) usize {
         return self.simstack.items.len;
-    }
-
-    pub fn getCurrentStackState(self: *const ScopeContext) Arraylist(Inst.Type) {
-        return self.simstack.clone() catch {
-            return Arraylist(Inst.Type).init(self.simstack.allocator);
-        };
     }
 };
 
@@ -130,23 +123,19 @@ pub fn generateArguments(args: Arraylist(*Ast.Arguments), ctx: *Context, scopeCt
     }
 
     try ctx.builder.reserveStack(@intCast(size));
-    for (args.items, Inst.RegIter[0..args.items.len]) |arg, reg| {
+    for (args.items, 0..) |arg, i| {
         const compile_arg_type = getCompileType(arg._type, scopeCtx.version);
         try scopeCtx.simstack.append(compile_arg_type);
         try ctx.builder.moveInst(
-            Inst.Location{ .register = reg },
+            Inst.Location{ .argument = i },
             Inst.Location{
-                .stack = .{
-                    .idx = scopeCtx.getCurrentStackIndex(),
-                    .stack_state = scopeCtx.getCurrentStackState(),
-                },
+                .stack = scopeCtx.getCurrentStackIndex(),
             },
             compile_arg_type,
         );
-        try scopeCtx.vars.put(arg.name, Inst.Location{ .stack = .{
-            .idx = scopeCtx.getCurrentStackIndex(),
-            .stack_state = scopeCtx.getCurrentStackState(),
-        } });
+        try scopeCtx.vars.put(arg.name, Inst.Location{
+            .stack = scopeCtx.getCurrentStackIndex(),
+        });
     }
 }
 
@@ -157,10 +146,7 @@ pub fn chooseWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext) Inst.Locatio
         }
     } else {
         break :blk Inst.Location{
-            .stack = .{
-                .idx = scopeCtx.getCurrentStackIndex(),
-                .stack_state = scopeCtx.getCurrentStackState(),
-            },
+            .stack = scopeCtx.getCurrentStackIndex(),
         };
     };
     return a;
@@ -178,6 +164,7 @@ pub fn pickWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext, t: Inst.Type) 
         .register => |reg| {
             ctx.registers.setRegister(reg, true);
         },
+        .argument => unreachable, // Can't pick an argument
         .label => unreachable,
         .void => {},
     }
@@ -190,55 +177,9 @@ pub fn freeLocation(loc: Inst.Location, scopeCtx: *ScopeContext, ctx: *Context) 
         .register => |reg| ctx.registers.setRegister(reg, false),
         .stack => {},
         .label => {},
+        .argument => {},
         .void => {},
     }
-}
-
-pub fn saveRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
-    var size: i64 = 0;
-    for (ctx.registers.utilised) |b| {
-        size += @intFromBool(b);
-    }
-    size *= 8;
-    try ctx.builder.reserveStack(@intCast(size));
-
-    for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
-        if (utilised) {
-            try scopeCtx.simstack.append(Inst.Type{ .intType = false });
-            try ctx.builder.moveInst(
-                Inst.Location{ .register = reg },
-                Inst.Location{ .stack = reg },
-                Inst.Type{ .intType = false }, // As we this is just a workarround to manipulate registers,
-                // we can just say it is int
-            );
-        }
-    }
-}
-
-pub fn loadRegistersFuncall(ctx: *Context, scopeCtx: *ScopeContext) !void {
-    for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
-        if (utilised) {
-            try ctx.builder.moveInst(
-                .{ .register = reg },
-                .{
-                    .stack = .{
-                        .idx = scopeCtx.getCurrentStackIndex(),
-                        .stack_state = scopeCtx.getCurrentStackState(),
-                    },
-                },
-                Inst.Type{ .intType = false }, // As we this is just a workarround to manipulate registers,
-                // we can just say it is int
-            );
-            scopeCtx.simstack.pop();
-        }
-    }
-
-    var size: i64 = 0;
-    for (ctx.registers.utilised) |b| {
-        size += @intFromBool(b);
-    }
-    size *= 8;
-    try ctx.builder.reserveStack(@intCast(-size));
 }
 
 pub fn generateValueAssignement(value: *const Ast.Value, scopeCtx: *ScopeContext) Inst.Location {
@@ -360,20 +301,19 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             // func should have the location 'label'
             func.label = ctx.getUid(analyser.functionVersion{ .name = func.label, .signature = functype, .version = func_version });
 
-            try scopeCtx.simstack.append(Inst.Type{ .function = {} });
-            const func_stack_loc_idx = scopeCtx.getCurrentStackIndex();
-            var func_stack_lock = Inst.Location{
-                .stack = .{
-                    .idx = func_stack_loc_idx,
-                    .stack_state = scopeCtx.getCurrentStackState(),
-                },
-            };
-            try ctx.builder.reserveStack(@intCast(8));
-            try ctx.builder.moveInst(func, func_stack_lock, Inst.Type{ .function = {} }); // We can reserve the function on the stack
-            try freeLocation(func, scopeCtx, ctx);
+            //try scopeCtx.simstack.append(Inst.Type{ .function = {} });
+            //const func_stack_loc_idx = scopeCtx.getCurrentStackIndex();
+            //const func_stack_lock = Inst.Location{
+            //    .stack = func_stack_loc_idx,
+            //};
+            //try ctx.builder.reserveStack(@intCast(8));
+            //try ctx.builder.moveInst(func, func_stack_lock, Inst.Type{ .function = {} }); // We can reserve the function on the stack
+            //try freeLocation(func, scopeCtx, ctx);
 
             var args = Arraylist(Inst.Location).init(ctx.allocator);
             for (funcall.args.items) |arg| {
+                // All the arguments are placed on the stack => we can have an inifite ammount of arguments at the same place
+                // and calling conventions are easyier if everything is temporally stored on the stack
                 const base_arg = try generateValue(arg, scopeCtx, ctx);
                 const arg_compile_type = getCompileType(
                     (try bbcTypes.getTypeOfValue(arg, scopeCtx.context, ctx.allocator)).decided,
@@ -381,10 +321,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 );
                 try scopeCtx.simstack.append(arg_compile_type);
                 const stack_lock = Inst.Location{
-                    .stack = .{
-                        .idx = scopeCtx.getCurrentStackIndex(),
-                        .stack_state = scopeCtx.getCurrentStackState(),
-                    },
+                    .stack = scopeCtx.getCurrentStackIndex(),
                 };
                 try ctx.builder.reserveStack(@intCast(8));
                 try ctx.builder.moveInst(base_arg, stack_lock, arg_compile_type);
@@ -393,13 +330,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             }
             //try saveRegistersFuncall(ctx, scopeCtx);
 
-            func_stack_lock = Inst.Location{
-                .stack = .{
-                    .idx = func_stack_loc_idx,
-                    .stack_state = scopeCtx.getCurrentStackState(),
-                },
-            };
-            try ctx.builder.funcall(func_stack_lock, args);
+            try ctx.builder.funcall(func, args);
 
             const funcretype = (try bbcTypes.getTypeOfValue(funcall.func, scopeCtx.context, ctx.allocator)).decided.base.function.retype;
             const ret_compile_type = getCompileType(
@@ -418,8 +349,8 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 try ctx.builder.decreaseStack(arg_compile_type);
                 _ = scopeCtx.simstack.pop().?;
             }
-            try ctx.builder.decreaseStack(Inst.Type{ .pointer = false });
-            _ = scopeCtx.simstack.pop().?;
+            //try ctx.builder.decreaseStack(Inst.Type{ .pointer = false });
+            //_ = scopeCtx.simstack.pop().?;
             return retloc;
         },
         .binaryOperator => |binop| {
@@ -432,29 +363,6 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             // String_stack_size is only the size of the string itself
             // Memory layout :  | __SIZE__ | __STRING_LIT...__ |
             //                  |    8     |        ...        |
-            //const string_stack_size = stringlit.value.len + 8 - (stringlit.value.len % 8);
-            //
-            //try scopeCtx.simstack.append(Inst.Type{ .arrayLike = false });
-            //try ctx.builder.reserveStack(@intCast(string_stack_size + 8));
-            //
-            //// We write the size on the stack
-            //try ctx.builder.intLit(@intCast(string_stack_size), Inst.Location{
-            //    .stack = .{
-            //        .idx = scopeCtx.getCurrentStackIndex(),
-            //        .stack_state = scopeCtx.getCurrentStackState(),
-            //    },
-            //});
-            //
-            //const ret_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .pointer = false });
-            //try ctx.builder.getStackPointer(ret_loc);
-            //
-            //// Then write the rest of the string
-            //for (stringlit.value, 0..) |char, idx| {
-            //    const char_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .charType = false });
-            //    try ctx.builder.charLit(char, char_loc);
-            //    try ctx.builder.writeArrayElement(ret_loc, idx, char_loc, Inst.Type{ .charType = false });
-            //    try freeLocation(char_loc, scopeCtx, ctx);
-            //}
             const string_name = try ctx.generateLabel("stringlit");
             try ctx.dec_strings.append(.{
                 .content = stringlit.value,
@@ -557,6 +465,10 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             try ctx.builder.labelDec(w_end);
             return Inst.Location{ .void = {} };
         },
+        .structInit => |stc_init| {
+            _ = stc_init;
+            return Inst.Location{ .void = {} };
+        },
         else => {
             std.debug.print("Unimplemented: {}\n", .{value.*});
             unreachable;
@@ -587,10 +499,7 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
         allocsize += getCompileSize(vartype);
         try newScopeCtx.simstack.append(vartype);
         try newScopeCtx.vars.put(variable.key_ptr.*, Inst.Location{
-            .stack = .{
-                .idx = newScopeCtx.getCurrentStackIndex(),
-                .stack_state = newScopeCtx.getCurrentStackState(),
-            },
+            .stack = scopeCtx.getCurrentStackIndex(),
         });
     }
     // allocating the variables declared in the scope

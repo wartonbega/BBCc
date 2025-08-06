@@ -230,6 +230,12 @@ pub const Function = struct {
     reference: []const u8,
 };
 
+pub const StructInit = struct {
+    reference: []const u8,
+    name: []const u8,
+    habitants: std.StringHashMap(*Value),
+};
+
 pub const Value = union(enum) {
     intLit: struct {
         value: i32,
@@ -263,6 +269,7 @@ pub const Value = union(enum) {
     funcall: *Funcall,
     assignement: *Assignement,
     varDec: *VarDeclaration,
+    structInit: *StructInit,
     function: *Function,
     NULL: bool,
 
@@ -308,6 +315,7 @@ pub const Value = union(enum) {
             .assignement => |value| value.reference,
             .varDec => |value| value.reference,
             .function => |value| value.reference,
+            .structInit => |value| value.reference,
             .NULL => "",
         };
     }
@@ -373,8 +381,23 @@ pub const funcDef = struct {
     }
 };
 
+pub const structDef = struct {
+    habitants: std.hash_map.StringHashMap(*Type),
+    name: []const u8,
+    reference: []const u8,
+
+    pub fn habitantExist(self: *structDef, name: []const u8) bool {
+        return self.habitants.contains(name);
+    }
+
+    pub fn getHabitant(self: *structDef, name: []const u8) *Type {
+        return self.habitants.get(name).?;
+    }
+};
+
 pub const ProgInstructions = union(enum) {
     FuncDef: *funcDef,
+    StructDef: *structDef,
     pub fn print(self: *ProgInstructions) void {
         switch (self.*) {
             .FuncDef => self.FuncDef.print(),

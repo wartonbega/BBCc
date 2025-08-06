@@ -95,13 +95,15 @@ pub fn duplicateWithErrorUnion(allocator: Allocator, base: *ast.Type, err: bool)
 
 pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Context, allocator: Allocator) !std.hash_map.StringHashMap(Type) {
     var func_version = std.hash_map.StringHashMap(Type).init(allocator);
+    if (functype.typeparam.items.len == 0) // No need to try to analyse everything
+        return func_version;
     for (func.args.items, functype.argtypes.items) |a, b| {
         const argtype = try getTypeOfValue(a, ctx, allocator);
-        switch (argtype) {
-            .undecided => errors.bbcErrorExit("Unable to determine the type of the argument", .{}, a.getReference()),
-            .decided => {
-                // If there's a type alias, then we get to assign it
-                if (b.*.base == .name and analyser.typeparamContains(functype.typeparam, b.base.name)) {
+        if (b.*.base == .name and analyser.typeparamContains(functype.typeparam, b.base.name)) {
+            switch (argtype) {
+                .undecided => errors.bbcErrorExit("Unable to determine the type of the argument", .{}, a.getReference()),
+                .decided => {
+                    // If there's a type alias, then we get to assign it
                     if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
                         errors.bbcErrorExit("'{s}' is already set to be type '{s}'", .{
                             b.*.base.name,
@@ -109,10 +111,10 @@ pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Conte
                         }, a.getReference());
                     }
                     try func_version.put(b.*.base.name, argtype);
-                } else if (!argtype.decided.match(b)) {
-                    errors.bbcErrorExit("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, a.getReference());
-                }
-            },
+                },
+            }
+        } else if (!argtype.decided.match(b)) {
+            errors.bbcErrorExit("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, a.getReference());
         }
     }
     return func_version;
@@ -223,6 +225,12 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
             // Can it evaluate to an error union ?
             const has_error = cond_type == .decided and cond_type.decided.err or exec_type == .decided and exec_type.decided.err;
             return CreateTypeVoid(allocator, has_error);
+        },
+        .structInit => |stc_init| {
+            const name = stc_init.name;
+            const ret_ast_type = try allocator.create(ast.Type);
+            ret_ast_type.base = .{ .name = name };
+            return Type{ .decided = ret_ast_type };
         },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
@@ -528,8 +536,13 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 try inferTypeValue(scope, ctx, allocator, expType);
                 try inferTypeValue(cond, ctx, allocator, bool_type);
             }
-            if (ifstmt.elsescope) |else_scope|
+            const void_type = try CreateTypeVoid(allocator, false);
+            defer void_type.deinit(allocator);
+            if (ifstmt.elsescope) |else_scope| {
                 try inferTypeValue(else_scope, ctx, allocator, expType);
+            } else if (!void_type.matchType(expType)) { // Else statements are required if the expected type isn't !Void
+                errors.bbcErrorExit("The if statements is expected to be of type '{s}' and not '!Void', so it requires an else clause", .{expType.toString(allocator)}, ifstmt.reference);
+            }
         },
         .parenthesis => |val| try inferTypeValue(val, ctx, allocator, expType),
         .errorCheck => |errcheck| {
@@ -547,6 +560,27 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             const bool_type = try CreateTypeBool(allocator, false);
             if (!expType.matchType(bool_type))
                 errors.bbcErrorExit("Expected type '{s}' but the bool literal evaluates to 'Bool'", .{expType.toString(allocator)}, value.getReference());
+        },
+
+        .structInit => |stc_init| {
+            const name = stc_init.name;
+            if (!ctx.typeDefExist(name))
+                errors.bbcErrorExit("Type name '{s}' don't exist", .{name}, stc_init.reference);
+            const orgn = ctx.getTypeDef(name);
+            if (stc_init.habitants.count() != orgn.habitants.count())
+                errors.bbcErrorExit(
+                    "Not the right number of habitants in the struct initialisation, expected {d} got {d}",
+                    .{ stc_init.habitants.count(), orgn.habitants.count() },
+                    stc_init.reference,
+                );
+
+            var stc_hab_it = stc_init.habitants.iterator();
+            while (stc_hab_it.next()) |hab| {
+                const hab_name = hab.key_ptr.*;
+                if (!orgn.habitantExist(hab_name))
+                    errors.bbcErrorExit("Habitant '{s}' is undefined", .{hab_name}, stc_init.reference);
+                try inferTypeValue(hab.value_ptr.*, ctx, allocator, Type{ .decided = orgn.getHabitant(hab_name) });
+            }
         },
         else => {
             std.debug.print("Unimplemented {}\n", .{value});

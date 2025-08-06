@@ -7,12 +7,10 @@ const HashMap = std.StringArrayHashMap(Value);
 const Allocator = std.mem.Allocator;
 
 pub const Location = union(enum) {
-    stack: struct {
-        idx: usize,
-        stack_state: Array(Type),
-    }, // The index on the stack, as well as the stack's state
+    stack: usize, // The index on the stack, beggining at 0
     register: Registers,
     label: []const u8,
+    argument: usize, // The number of the argument: 0 to \infnity
     void: void,
 };
 // r15 is reserved for the dumpers for swapping values
@@ -209,6 +207,10 @@ pub const Instructions = union(enum) {
         name: []const u8,
         content: varContentType,
     },
+    heapAlloc: struct {
+        size: u64,
+        dest: Location,
+    },
 
     pub fn print(self: *const Instructions, idx: usize) void {
         std.debug.print("#{d}", .{idx});
@@ -254,6 +256,7 @@ pub const Instructions = union(enum) {
             .declareVariable => |inst| std.debug.print("\tDeclaring variable {s} ...\n", .{inst.name}),
             .beginVariableSection => std.debug.print("Begining variable section:\n", .{}),
             .Label => |inst| std.debug.print("label {s}:\n", .{inst}),
+            .heapAlloc => |inst| std.debug.print("heap alloc {d} bytes in {}", .{ inst.size, inst.dest }),
             else => {},
         }
     }
@@ -418,6 +421,10 @@ pub const Builder = struct {
 
     pub fn labelDec(self: *Builder, name: []const u8) !void {
         try self.code.append(Instructions{ .Label = name });
+    }
+
+    pub fn heapAlloc(self: *Builder, size: u64, dest: Location) !void {
+        try self.code.append(Instructions{ .heapAlloc = .{ .dest = dest, .size = size } });
     }
 };
 

@@ -34,7 +34,8 @@ pub const Context = struct {
     variables: VarHashmap,
     trait_map: TraitHashmap,
     typealiases: TypeTraitHashmap, // For declaring <T: Add, Eq, ...> => (a: T, b: Int)
-    type_implem: ImplemHashmap,
+    type_implem: ImplemHashmap, // All the implementations for the types: eg Int => Add(Int), Sub(Int), etc...
+    typedef: std.StringHashMap(*ast.structDef),
     parent: ?*Context,
     functions_to_compile: ArrayList(functionVersion),
     functions: std.hash_map.StringHashMap(*ast.funcDef),
@@ -47,6 +48,7 @@ pub const Context = struct {
         const type_implem = ImplemHashmap.init(allocator);
         const function_to_compile = ArrayList(functionVersion).init(allocator);
         const functions = std.hash_map.StringHashMap(*ast.funcDef).init(allocator);
+        const typedef = std.StringHashMap(*ast.structDef).init(allocator);
         self.* = .{
             .variables = vars,
             .parent = null,
@@ -55,6 +57,7 @@ pub const Context = struct {
             .type_implem = type_implem,
             .functions_to_compile = function_to_compile,
             .functions = functions,
+            .typedef = typedef,
         };
         return self;
     }
@@ -69,6 +72,7 @@ pub const Context = struct {
         const types = try self.trait_map.clone();
         const type_implem = try self.type_implem.clone();
         const typealiases = try self.typealiases.clone();
+        const typedef = try self.typedef.clone();
         new.* = .{
             .variables = vars,
             .parent = self,
@@ -77,8 +81,53 @@ pub const Context = struct {
             .type_implem = type_implem,
             .functions_to_compile = ArrayList(functionVersion).init(allocator),
             .functions = std.hash_map.StringHashMap(*ast.funcDef).init(allocator),
+            .typedef = typedef,
         };
         return new;
+    }
+
+    pub fn typeExist(self: *Context, _type: *const ast.Type) bool {
+        // returns wether a type exists
+        if (_type.base == .name) {
+            const name = _type.base.name;
+            // Layed out like this for readability purpose
+            if (std.mem.eql(u8, name, "Int"))
+                return true;
+            if (std.mem.eql(u8, name, "Bool"))
+                return true;
+            if (std.mem.eql(u8, name, "String"))
+                return true;
+            if (std.mem.eql(u8, name, "Char"))
+                return true;
+            if (std.mem.eql(u8, name, "Void"))
+                return true;
+            // It can be both defined as a struct or countained in the type aliases section
+            return self.typedef.contains(name) or self.typealiases.contains(name);
+        } else {
+            // TODO: implement recursive checking for function types
+            return true; // it is a function type, so it exists for now
+        }
+    }
+
+    pub fn typeContainHabitants(self: *Context, name: []const u8) bool {
+        // returns wether a type is a struct and therefore contains habitants
+        // or maybe it is unknown therefore it can't
+        // TODO: implement typealiases with
+        // habitant accession
+        return self.typedef.contains(name);
+    }
+
+    pub fn typeDefExist(self: *Context, name: []const u8) bool {
+        // Same as typeContainsHabitants, but for another usage
+        return self.typedef.contains(name);
+    }
+
+    pub fn addTypeDef(self: *Context, name: []const u8, stct: *ast.structDef) !void {
+        try self.typedef.put(name, stct);
+    }
+
+    pub fn getTypeDef(self: *Context, name: []const u8) *ast.structDef {
+        return self.typedef.get(name).?;
     }
 
     pub fn functionExist(self: *Context, name: []const u8) bool {
@@ -142,6 +191,10 @@ pub const Context = struct {
 pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Allocator, rightType: Types.Type) !void {
     switch (value.*) {
         .varDec => |vardec| {
+            if (rightType == .undecided) {
+                try ctx.createVariable(vardec.name, rightType);
+                return;
+            }
             if (ctx.variableExist(vardec.name))
                 errors.bbcErrorExit("The variable {s} has already been declared before", .{vardec.name}, vardec.reference);
             const lhs_type = try Types.duplicateWithErrorUnion(allocator, rightType.decided, false);
@@ -358,6 +411,10 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
                 if (!cond_type.matchType(bool_type))
                     errors.bbcErrorExit("The type of this condition does not match 'Bool'", .{}, cond.getReference());
             }
+
+            const void_type = try Types.CreateTypeVoid(allocator, false);
+            defer void_type.deinit(allocator);
+
             if (ifstmt.elsescope) |else_scope| {
                 const else_type = try analyseValue(else_scope, ctx, allocator);
                 if (else_type == .undecided)
@@ -366,6 +423,8 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
                 const real_else_type = try Types.duplicateWithErrorUnion(allocator, else_type.decided, base_scope_type.decided.err);
                 if (!real_else_type.matchType(base_scope_type))
                     errors.bbcErrorExit("The type of the else '{s}' scope don't match the type of this if statement", .{else_type.toString(allocator)}, else_scope.getReference());
+            } else if (!void_type.matchType(base_scope_type)) { // Else statements are required if the evaluation type insn't !Void
+                errors.bbcErrorExit("The if statements evalutates to type '{s}' and not '!Void', so it requires an else clause", .{base_scope_type.toString(allocator)}, ifstmt.reference);
             }
             return base_scope_type;
         },
@@ -419,6 +478,41 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
 
             return Types.CreateTypeVoid(allocator, has_error);
         },
+        .structInit => |stc_init| {
+            const name = stc_init.name;
+            if (!ctx.typeDefExist(name))
+                errors.bbcErrorExit("Type name '{s}' don't exist", .{name}, stc_init.reference);
+            const orgn = ctx.getTypeDef(name);
+            if (stc_init.habitants.count() != orgn.habitants.count())
+                errors.bbcErrorExit(
+                    "Not the right number of habitants in the struct initialisation, expected {d} got {d}",
+                    .{ stc_init.habitants.count(), orgn.habitants.count() },
+                    stc_init.reference,
+                );
+
+            var stc_hab_it = stc_init.habitants.iterator();
+            var has_error = false;
+            while (stc_hab_it.next()) |hab| {
+                const hab_name = hab.key_ptr.*;
+                if (!orgn.habitantExist(hab_name))
+                    errors.bbcErrorExit("Habitant '{s}' is undefined", .{hab_name}, stc_init.reference);
+                const hab_type = try analyseValue(hab.value_ptr.*, ctx, allocator);
+                // The type got does not match the expected one
+                if (!hab_type.match(orgn.getHabitant(hab_name)))
+                    errors.bbcErrorExit("Habitant '{s}' is expected to be of type '{s}' but is actually of type '{s}'", .{
+                        hab_name,
+                        hab_type.toString(allocator),
+                        orgn.getHabitant(hab_name).toString(allocator),
+                    }, stc_init.reference);
+                if (hab_type == .decided)
+                    has_error = has_error or hab_type.decided.err;
+            }
+            const ret_ast_type = try allocator.create(ast.Type);
+            ret_ast_type.base = .{ .name = name };
+            ret_ast_type.references = 0;
+            ret_ast_type.err = has_error;
+            return Types.Type{ .decided = ret_ast_type };
+        },
         else => unreachable,
     }
 }
@@ -462,16 +556,26 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
     // Associating the name with the type
     try par_ctx.setVariable(func.name, Types.Type{ .decided = functype });
 
+    // We can create a child context for the function
     var ctx = try par_ctx.createChild(allocator);
-
-    // associating variables
-    for (func.arguments.items) |arg| {
-        try ctx.setVariable(arg.name, Types.Type{ .decided = arg._type });
-    }
 
     for (func.typeparam.items) |type_param| {
         try ctx.typealiases.put(type_param.name, Traits.traitsFromStrings(type_param.traits, allocator));
     }
+
+    if (!ctx.typeExist(func.return_type))
+        errors.bbcErrorExit("The type '{s}' doesn't exist", .{func.return_type.toString(allocator)}, func.reference);
+
+    // associating variables
+    for (func.arguments.items) |arg| {
+        if (!ctx.typeExist(arg._type))
+            errors.bbcErrorExit("The type '{s}' doesn't exist", .{arg._type.toString(allocator)}, arg.reference);
+        try ctx.setVariable(arg.name, Types.Type{ .decided = arg._type });
+    }
+
+    //    for (func.typeparam.items) |type_param| {
+    //        try ctx.typealiases.put(type_param.name, Traits.traitsFromStrings(type_param.traits, allocator));
+    //    }
 
     std.debug.print("\n#[Analysing {s}]\n", .{func.name});
     _ = try analyseScope(func.code, ctx, allocator);
@@ -521,10 +625,25 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     try Traits.initBasicTraits(ctx, allocator);
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
-            .FuncDef => {
-                if (ctx.functionExist(inst.FuncDef.name))
-                    errors.bbcErrorExit("Can't shadown the definition of function '{s}' previously defined here: {s}", .{ inst.FuncDef.name, ctx.getFunction(inst.FuncDef.name).reference }, inst.FuncDef.reference);
-                try ctx.setFunction(inst.FuncDef.name, inst.FuncDef);
+            .FuncDef => |func| {
+                if (ctx.functionExist(func.name))
+                    errors.bbcErrorExit("Can't shadow the definition of function '{s}' previously defined here: {s}", .{ inst.FuncDef.name, ctx.getFunction(inst.FuncDef.name).reference }, inst.FuncDef.reference);
+                //
+                //for (func.arguments.items) |arg| {
+                //    if (!ctx.typeExist(arg._type))
+                //        errors.bbcErrorExit("The type '{s}' doesn't exist", .{arg._type.toString(allocator)}, arg.reference);
+                //}
+                //if (!ctx.typeExist(func.return_type))
+                //    errors.bbcErrorExit("The type '{s}' doesn't exist", .{func.return_type.toString(allocator)}, func.reference);
+                try ctx.setFunction(func.name, func);
+            },
+            .StructDef => |stct| {
+                var hab_it = stct.habitants.iterator();
+                while (hab_it.next()) |hab| {
+                    if (!ctx.typeExist(hab.value_ptr.*))
+                        errors.bbcErrorExit("The type '{s}' doesn't exist", .{hab.value_ptr.*.toString(allocator)}, stct.reference);
+                }
+                try ctx.addTypeDef(stct.name, stct);
             },
         }
     }

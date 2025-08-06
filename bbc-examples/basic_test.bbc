@@ -1,28 +1,20 @@
 
-func basic_func ( ) !Int {
-    98 / 2
+struct Tstruct {
+    Int a,
+    Int b,
 }
 
-func toto (Int x) Int {
-    let b = if 1 == x 
-        420
-    else
-        42
-    b
+func toto (Tstruct x) Int {
+    1
 }
 
-func toto_beau (Int x) !Int {
-    let b 
-    if (1 == x) {
-        b = 80
-    } else {
-        b = 42 / 0
-    } 
-    b
+
+func <Type: Add> test (Type x) Type {
+    x
 }
 
 func main () !Int {
-    let b = "toto"
-    let a = toto_beau(1) ? err 92
-    a
+    let a = test(2)
+    let b = test(1==2)
+    69
 }
