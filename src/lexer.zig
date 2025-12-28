@@ -2,6 +2,7 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const ast = @import("ast.zig");
 const errors = @import("errors.zig");
+const types = @import("types.zig");
 
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
@@ -112,6 +113,7 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     //  | (value)
     //  | {scope}
     //  | func (args) retype -> {}
+    //  | free value
 
     switch ((try reader.peek()).type) {
         TokenType.IF => {
@@ -280,6 +282,15 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                 .reference = fn_dec_tok.pos,
             };
             ret.* = ast.Value{ .function = function };
+            return ret;
+        },
+        TokenType.FREE => {
+            const free_tok = reader.consume(.FREE);
+            const ret = try allocator.create(ast.Value);
+            ret.* = ast.Value{ .freeKeyword = .{
+                .val = try lexeValue7(reader, allocator),
+                .reference = free_tok.pos,
+            } };
             return ret;
         },
         else => {
@@ -640,11 +651,19 @@ pub fn lexeStructDef(reader: *tokenReader, allocator: Allocator) !*ast.structDef
     ret.habitants = std.hash_map.StringHashMap(*ast.Type).init(allocator);
     ret.reference = struct_keyword.pos;
     ret.name = st_name.value;
+    ret.order = std.ArrayList([]const u8).init(allocator);
+
+    try ret.habitants.put("_count", (try types.CreateTypeInt(allocator, false)).decided);
+    try ret.habitants.put("_size", (try types.CreateTypeInt(allocator, false)).decided);
+
+    try ret.order.append("_count");
+    try ret.order.append("_size"); // For now unused
 
     while ((reader.canPeek()) and (try reader.peek()).type != .C_CUR) {
         const ttype = try lexeType(reader, allocator);
         const name = reader.consume(.IDENT);
         try ret.habitants.put(name.value, ttype);
+        try ret.order.append(name.value);
         if (reader.canPeek() and (try reader.peek()).type != .C_CUR)
             _ = reader.consume(.COMMA);
     }

@@ -25,22 +25,23 @@ pub fn reg(r: Inst.Registers, size: i64) []const u8 {
             else => unreachable,
         };
     }
-    return switch (r) {
-        .r0 => "al",
-        .r1 => "bl",
-        .r2 => "cl",
-        .r3 => "dl",
-        .r4 => "sil",
-        .r5 => "dil",
-        .r6 => "r8b",
-        .r7 => "r9b",
-        .r8 => "r10b",
-        .r9 => "r11b",
-        .r10 => "r12b",
-        .r11 => "r13b",
-        .r12 => "r14b",
-        else => unreachable,
-    };
+    unreachable;
+    //return switch (r) {
+    //    .r0 => "al",
+    //    .r1 => "bl",
+    //    .r2 => "cl",
+    //    .r3 => "dl",
+    //    .r4 => "sil",
+    //    .r5 => "dil",
+    //    .r6 => "r8b",
+    //    .r7 => "r9b",
+    //    .r8 => "r10b",
+    //    .r9 => "r11b",
+    //    .r10 => "r12b",
+    //    .r11 => "r13b",
+    //    .r12 => "r14b",
+    //    else => unreachable,
+    //};
 }
 
 fn getWordSize(size: i64) []const u8 {
@@ -112,7 +113,7 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
     const writer = file.writer();
 
     //_ = try writer.write("%macro LOAD_ADDRESS 2\n\tadrp %1, %2@PAGE\n\tadd  %1, %1, %2@PAGEOFF\n%endmacro\n");
-    _ = try writer.print("default rel\nsection .text align=16\n\tglobal {s}\nextern _malloc\n", .{entry_point});
+    _ = try writer.print("default rel\nsection .text align=16\n\tglobal {s}\nextern _malloc\nextern _free\n", .{entry_point});
     for (builder.code.items) |instruction| {
         switch (instruction) {
             //.Plus => |inst| writer.writeAll("\tPlus({}, {})\n"),
@@ -134,6 +135,8 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 try writer.print("\tadd rsp, {d}\n", .{-inst});
             },
             .Move => |inst| {
+                if (inst._type == .voidType)
+                    continue;
                 if (inst.to == .register and inst.from == .label) {
                     try writer.print("\tlea {s}, {s}\n", .{ reg(inst.to.register, 8), inst.from.label });
                 } else if (inst.to == .stack and inst.from == .label) {
@@ -477,6 +480,74 @@ pub fn dumpAssemblyX86(builder: *const Inst.Builder, entry_point: []const u8) !v
                 _ = try prepareForLoc(writer, not);
                 try writer.print("\txor {s}, 1\n", .{dumpLocation(not, 8)});
             },
+            .heapAlloc => |alloc| {
+                if (alloc.dest != .register or alloc.dest.register != .r0)
+                    try writer.print("\tpush rax\n", .{});
+                if (alloc.dest != .register or alloc.dest.register != .r5)
+                    try writer.print("\tpush rdi\n", .{});
+
+                try writer.print("\tmov rdi, {d}\n", .{8 * alloc.size});
+                try writer.print("\tcall _malloc\n", .{});
+                try writer.print("\tmov {s}, rax\n", .{dumpLocation(alloc.dest, 8)});
+
+                if (alloc.dest != .register or alloc.dest.register != .r5)
+                    try writer.print("\tpop rdi\n", .{});
+                if (alloc.dest != .register or alloc.dest.register != .r0)
+                    try writer.print("\tpop rax\n", .{});
+            },
+            .heapFree => |dest| {
+                if (dest != .register or dest.register != .r5)
+                    try writer.print("\tpush rdi\n", .{});
+                try writer.print("\tmov rdi, {s}\n", .{dumpLocation(dest, 8)});
+                try writer.print("\tcall _free\n", .{});
+                if (dest != .register or dest.register != .r5)
+                    try writer.print("\tpop rdi\n", .{});
+            },
+            .writeToPointer => |ptr_write| {
+                _ = try prepareForLoc(writer, ptr_write.dest);
+                if (try prepareForLoc(writer, ptr_write.content)) {
+                    try writer.print("\tmov r15, QWORD [rbp + r15]\n", .{});
+                    try writer.print("\tmov QWORD [r15 + 8*{d}], {s}\n", .{ ptr_write.decal, dumpLocation(ptr_write.content, 8) });
+                } else try writer.print("\tmov QWORD [{s} + 8*{d}], {s}\n", .{ dumpLocation(ptr_write.dest, 8), ptr_write.decal, dumpLocation(ptr_write.content, 8) });
+            },
+            .readFromPointer => |ptr_read| {
+                _ = try prepareForLoc(writer, ptr_read.dest);
+                if (try prepareForLoc(writer, ptr_read.origin)) {
+                    try writer.print("\tmov r15, QWORD [rbp + r15]\n", .{});
+                    try writer.print("\tmov {s}, QWORD [r15 + 8*{d}]\n", .{ dumpLocation(ptr_read.dest, 8), ptr_read.decal });
+                } else try writer.print("\tmov {s}, QWORD [{s} + 8*{d}]\n", .{ dumpLocation(ptr_read.dest, 8), dumpLocation(ptr_read.origin, 8), ptr_read.decal });
+            },
+            .incrementeReferenceCounter => |value| {
+                if (try prepareForLoc(writer, value)) {
+                    try writer.print("\tmov r15, QWORD [rbp + r15]\n", .{});
+                    try writer.print("\tmov r15, QWORD [r15]\n", .{});
+                    try writer.print("\tadd r15, 1\n", .{});
+                    try writer.print("\tmov QWORD [r15], r15\n", .{});
+                } else {
+                    try writer.print("\tmov r15, QWORD [{s}]\n", .{dumpLocation(value, 8)});
+                    try writer.print("\tadd r15, 1\n", .{});
+                    try writer.print("\tmov QWORD [{s}], r15\n", .{dumpLocation(value, 8)});
+                }
+            },
+            .decrementReferenceCounter => |value| {
+                if (try prepareForLoc(writer, value)) {
+                    try writer.print("\tmov r15, QWORD [rbp + r15]\n", .{});
+                    try writer.print("\tmov r15, QWORD [r15]\n", .{});
+                    try writer.print("\tsub r15, 1\n", .{});
+                    try writer.print("\tmov QWORD [r15], r15\n", .{});
+                } else {
+                    try writer.print("\tmov r15, QWORD [{s}]\n", .{dumpLocation(value, 8)});
+                    try writer.print("\tsub r15, 1\n", .{});
+                    try writer.print("\tmov QWORD [{s}], r15\n", .{dumpLocation(value, 8)});
+                }
+            },
+            .pushValue => |value| {
+                try writer.print("\tpush {s}\n", .{dumpLocation(value, 8)});
+            },
+            .popValue => |value| {
+                try writer.print("\tpop {s}\n", .{dumpLocation(value, 8)});
+            },
+
             else => unreachable,
         }
     }

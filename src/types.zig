@@ -232,6 +232,22 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
             ret_ast_type.base = .{ .name = name };
             return Type{ .decided = ret_ast_type };
         },
+        .unaryOperatorRight => |uop_right| {
+            if (uop_right.operator == .pointAttr) {
+                const left_value = try getTypeOfValue(uop_right.expr, ctx, allocator);
+                if (left_value == .undecided)
+                    return Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
+                if (!ctx.typeDefExist(left_value.decided.base.name)) {
+                    errors.bbcErrorExit("Unknown struct type name '{s}'", .{left_value.toString(allocator)}, uop_right.reference);
+                }
+                return Type{ .decided = ctx.getTypeDef(left_value.decided.base.name).getHabitant(uop_right.operator.pointAttr) };
+            } else {
+                unreachable;
+            }
+        },
+        .freeKeyword => |_| {
+            return CreateTypeVoid(allocator, false);
+        },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
             unreachable;
@@ -567,7 +583,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             if (!ctx.typeDefExist(name))
                 errors.bbcErrorExit("Type name '{s}' don't exist", .{name}, stc_init.reference);
             const orgn = ctx.getTypeDef(name);
-            if (stc_init.habitants.count() != orgn.habitants.count())
+            if (stc_init.habitants.count() != orgn.habitants.count() - 2)
                 errors.bbcErrorExit(
                     "Not the right number of habitants in the struct initialisation, expected {d} got {d}",
                     .{ stc_init.habitants.count(), orgn.habitants.count() },
@@ -582,6 +598,18 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 try inferTypeValue(hab.value_ptr.*, ctx, allocator, Type{ .decided = orgn.getHabitant(hab_name) });
             }
         },
+        .unaryOperatorRight => |uop_right| {
+            if (uop_right.operator == .pointAttr) {
+                const left_value = try analyser.analyseValue(uop_right.expr, ctx, allocator);
+                if (left_value == .undecided)
+                    errors.bbcErrorExit("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
+                if (!ctx.typeDefExist(left_value.decided.base.name))
+                    errors.bbcErrorExit("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
+            } else {
+                unreachable;
+            }
+        },
+        .freeKeyword => |_| {},
         else => {
             std.debug.print("Unimplemented {}\n", .{value});
             unreachable;

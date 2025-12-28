@@ -1,20 +1,75 @@
 
-struct Tstruct {
-    Int a,
-    Int b,
+// --------- STRUCTURE TEST ----------
+// struct Bstruct {
+//     Int toto,
+//     Int b,
+// }
+// 
+// func BstructFree(Bstruct this) Void {
+//     // Do nothing
+// }
+// 
+// struct Tstruct {
+//     Bstruct a,
+//     Int b,
+// }
+// 
+// func TstructFree (Tstruct this) Void {
+//     if this._count == 0 {
+//         BstructFree(this.a)
+//         free this
+//     }
+// }
+// 
+// 
+// func toto (Tstruct x) Int {
+//     x.a.toto
+// }
+// 
+// func main () !Int {
+//     let a = @Tstruct {
+//         a = @Bstruct { toto = 69, b = 67 },
+//         b = 87
+//     }
+//     toto(a)
+// }
+
+
+// --------- POLYMORPHISME TEST ----------
+// func <Type: Add> test (Type x) Type {
+//     x + x
+// }
+//
+// func main () !Int {
+//     let a = test(1)
+//     let b = test(false)
+//     0
+// }
+
+
+// --------- CONDITION TEST ----------
+// func main () !Int {
+//     let a = if 2 == 2 {
+//         3
+//     } else {
+//         4
+//     }
+//     a
+// }
+
+
+// --------- TRAIT TEST ----------
+struct Vec2 {
+    Int x,
+    Int y
 }
 
-func toto (Tstruct x) Int {
-    1
-}
-
-
-func <Type: Add> test (Type x) Type {
-    x
+implement Add for Vec2 {
+    
 }
 
 func main () !Int {
-    let a = test(2)
-    let b = test(1==2)
-    69
+    let a = 
+
+    a
 }

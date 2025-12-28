@@ -20,6 +20,8 @@ pub const Trait = enum {
     Gr,
 
     Display,
+
+    PointAccession,
 };
 
 const TraitHashmap = std.hash_map.StringHashMap(ArrayList(Trait));
@@ -211,6 +213,7 @@ pub fn stringFromTrait(t: Trait) []const u8 {
         .Le => return "Le",
         .Gr => return "Gr",
         .Display => return "Display",
+        .PointAccession => return "PointAccession",
     }
 }
 
@@ -230,6 +233,7 @@ pub fn defaultReturnType(t: Trait, param: Types.Type, alloc: std.mem.Allocator) 
         .Add, .Sub, .Mult, .Div, .Mod => return param,
         .Eq, .Gr, .GrEq, .Le, .LeEq => return try Types.CreateTypeBool(alloc, false),
         .Display => return try Types.CreateTypeString(alloc, false),
+        .PointAccession => return try Types.CreateTypeInt(alloc, false),
     }
 }
 
@@ -335,6 +339,26 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             while (stc_hab_it.next()) |hab| {
                 try traitUnion(&ret, &try getTypeTraits(hab.value_ptr.*, ctx, allocator));
             }
+        },
+        .unaryOperatorRight => |uop_right| {
+            try traitUnion(&ret, &try getTypeTraits(uop_right.expr, ctx, allocator));
+            const expr_type = try Types.getTypeOfValue(uop_right.expr, ctx, allocator);
+            switch (expr_type) {
+                .decided => |_type| {
+                    switch (_type.base) {
+                        .function => errors.bbcErrorExit("'function' like type (here {s}) don't support point attribute", .{_type.toString(allocator)}, uop_right.reference),
+                        .name => |n| {
+                            if (!ret.contains(n))
+                                try ret.put(n, ArrayList(Trait).init(allocator));
+                            try ret.getPtr(n).?.append(.PointAccession);
+                        },
+                    }
+                },
+                .undecided => {},
+            }
+        },
+        .freeKeyword => |freekwd| {
+            try traitUnion(&ret, &try getTypeTraits(freekwd.val, ctx, allocator));
         },
         else => {
             std.debug.print("Unimplemented {}", .{instruction});

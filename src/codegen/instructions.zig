@@ -71,9 +71,7 @@ pub const Type = union(enum) {
     charType: bool,
     pointer: bool,
     function: void,
-    structType: struct {
-        habitants: []const Type,
-    },
+    structType: Array(Type),
 
     pub fn hasError(self: *const Type) bool {
         switch (self.*) {
@@ -85,13 +83,21 @@ pub const Type = union(enum) {
 
 pub fn getCompileSize(t: Type) i64 {
     // Returns the size in bytes of the Compile Type
-    return switch (t) {
+    return blk: switch (t) {
+        .structType => |stc| {
+            var acc: i64 = @intCast(2);
+            for (stc.items) |hab|
+                acc += getCompileSize(hab);
+            std.debug.print("{d}\n", .{acc});
+            break :blk acc;
+        },
         .intType => 8,
         .pointer => 8,
         .function => 8,
         .stringType => 8,
         .arrayLike => 8,
         .charType => 1,
+        .voidType => 1,
         else => unreachable,
     };
 }
@@ -208,9 +214,24 @@ pub const Instructions = union(enum) {
         content: varContentType,
     },
     heapAlloc: struct {
-        size: u64,
+        size: i64,
         dest: Location,
     },
+    heapFree: Location,
+    writeToPointer: struct {
+        dest: Location,
+        decal: i64,
+        content: Location,
+    },
+    readFromPointer: struct {
+        dest: Location,
+        decal: i64,
+        origin: Location,
+    },
+    incrementeReferenceCounter: Location,
+    decrementReferenceCounter: Location,
+    pushValue: Location,
+    popValue: Location,
 
     pub fn print(self: *const Instructions, idx: usize) void {
         std.debug.print("#{d}", .{idx});
@@ -423,8 +444,36 @@ pub const Builder = struct {
         try self.code.append(Instructions{ .Label = name });
     }
 
-    pub fn heapAlloc(self: *Builder, size: u64, dest: Location) !void {
+    pub fn heapAlloc(self: *Builder, size: i64, dest: Location) !void {
         try self.code.append(Instructions{ .heapAlloc = .{ .dest = dest, .size = size } });
+    }
+
+    pub fn heapFree(self: *Builder, dest: Location) !void {
+        try self.code.append(Instructions{ .heapFree = dest });
+    }
+
+    pub fn writeToPointer(self: *Builder, dest: Location, decal: i64, content: Location) !void {
+        try self.code.append(Instructions{ .writeToPointer = .{ .content = content, .decal = decal, .dest = dest } });
+    }
+
+    pub fn readFromPointer(self: *Builder, dest: Location, decal: i64, origin: Location) !void {
+        try self.code.append(Instructions{ .readFromPointer = .{ .dest = dest, .decal = decal, .origin = origin } });
+    }
+
+    pub fn incrementeReferenceCounter(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .incrementeReferenceCounter = loc });
+    }
+
+    pub fn decrementReferenceCounter(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .decrementReferenceCounter = loc });
+    }
+
+    pub fn pushValue(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .pushValue = loc });
+    }
+
+    pub fn popValue(self: *Builder, loc: Location) !void {
+        try self.code.append(Instructions{ .popValue = loc });
     }
 };
 

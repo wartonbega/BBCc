@@ -14,7 +14,6 @@ pub const TypeFunc = struct {
     retype: *Type,
     typeparam: ArrayList(TypeParam),
     fname: []const u8,
-    //uid: []const u8, // A unique Id/name for compilation purpose
 };
 
 pub const TypeBase = union(enum) {
@@ -271,6 +270,10 @@ pub const Value = union(enum) {
     varDec: *VarDeclaration,
     structInit: *StructInit,
     function: *Function,
+    freeKeyword: struct {
+        val: *Value,
+        reference: []const u8,
+    },
     NULL: bool,
 
     pub fn print(self: *Value, rec: i32) void {
@@ -316,6 +319,7 @@ pub const Value = union(enum) {
             .varDec => |value| value.reference,
             .function => |value| value.reference,
             .structInit => |value| value.reference,
+            .freeKeyword => |value| value.reference,
             .NULL => "",
         };
     }
@@ -383,6 +387,7 @@ pub const funcDef = struct {
 
 pub const structDef = struct {
     habitants: std.hash_map.StringHashMap(*Type),
+    order: std.ArrayList([]const u8),
     name: []const u8,
     reference: []const u8,
 

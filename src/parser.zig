@@ -33,6 +33,7 @@ pub const TokenType = enum {
     FOR,
     STRUCT,
     ENUM,
+    FREE,
 
     IDENT, // identifier
     INTLIT, // Integer literal
@@ -94,6 +95,9 @@ fn getIdentType(ident: []const u8) TokenType {
     }
     if (std.mem.eql(u8, ident, "enum")) {
         return TokenType.ENUM;
+    }
+    if (std.mem.eql(u8, ident, "free")) {
+        return TokenType.FREE;
     }
     return TokenType.IDENT;
 }
@@ -262,7 +266,7 @@ fn parseString(reader: *Reader, allocator: std.mem.Allocator) !Token {
 
 fn ignoreLineComment(reader: *Reader) void {
     // the two first '//'
-    while (reader.consume(1)[0] != '\n') {}
+    while (reader.canPeek(1) and reader.consume(1)[0] != '\n') {}
 }
 
 fn parseOperator(reader: *Reader, allocator: std.mem.Allocator) !Token {
