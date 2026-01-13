@@ -562,6 +562,15 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         .freeKeyword => |_| {
             return Types.CreateTypeVoid(allocator, false);
         },
+        .Print => |print| {
+            var has_error = false;
+            for (print.args.items) |arg| {
+                const arg_t = try analyseValue(arg, ctx, allocator);
+                if (arg_t == .decided and arg_t.decided.err)
+                    has_error = true;
+            }
+            return Types.CreateTypeVoid(allocator, has_error);
+        },
         else => {
             std.debug.print("{?}", .{value.*});
             unreachable;

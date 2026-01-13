@@ -273,6 +273,11 @@ pub const Value = union(enum) {
         val: *Value,
         reference: []const u8,
     },
+    Print: struct {
+        ln: bool, // new line
+        args: ArrayList(*Value),
+        reference: []const u8,
+    },
     NULL: bool,
 
     pub fn print(self: *Value, rec: i32) void {
@@ -320,7 +325,7 @@ pub const Value = union(enum) {
             .function => |value| value.reference,
             .structInit => |value| value.reference,
             .freeKeyword => |value| value.reference,
-
+            .Print => |value| value.reference,
             .NULL => "",
         };
     }

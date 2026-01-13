@@ -57,11 +57,18 @@ pub fn createTraitWithBinOperators(type_implems: *ArrayList(analyser.funcPair), 
 
 pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !void {
     // Create the Int type
-    var int_traits = ArrayList(Trait).init(allocator);
     const int_type = try Types.CreateTypeInt(allocator, false);
     const int_type_err = try Types.CreateTypeInt(allocator, true);
     const bool_type = try Types.CreateTypeBool(allocator, false);
+    const char_type = try Types.CreateTypeString(allocator, false);
+    const string_type = try Types.CreateTypeChar(allocator, false);
     const void_type = try Types.CreateTypeVoid(allocator, false);
+
+    // +————————————————————————————————+
+    // |   INT TRAITS AND OPERATION     |
+    // +————————————————————————————————+
+
+    var int_traits = ArrayList(Trait).init(allocator);
     try int_traits.append(Trait.Add);
     try int_traits.append(Trait.Sub);
     try int_traits.append(Trait.Mult);
@@ -100,7 +107,16 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
         &int_implems,
         bool_type.decided,
         int_type.decided,
-        &[_]ast.binOperator{ .Plus, .Minus, .Times },
+        &[_]ast.binOperator{ .Plus, .Minus },
+        allocator,
+    );
+
+    // int + char -> int
+    try createTraitWithBinOperators(
+        &int_implems,
+        char_type.decided,
+        int_type.decided,
+        &[_]ast.binOperator{ .Plus, .Minus },
         allocator,
     );
 
@@ -108,6 +124,15 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
     try createTraitWithBinOperators(
         &int_implems,
         int_type.decided,
+        bool_type.decided,
+        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
+        allocator,
+    );
+
+    // int == char -> bool
+    try createTraitWithBinOperators(
+        &int_implems,
+        char_type.decided,
         bool_type.decided,
         &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
         allocator,
@@ -125,6 +150,97 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
     try ctx.type_implem.put(
         "Int",
         int_implems,
+    );
+
+    // +—————————————————————————————————+
+    // |   CHAR TRAITS AND OPERATION     |
+    // +—————————————————————————————————+
+    var char_traits = ArrayList(Trait).init(allocator);
+    try char_traits.append(Trait.Add);
+    try char_traits.append(Trait.Sub);
+    try char_traits.append(Trait.Eq);
+    try char_traits.append(Trait.GrEq);
+    try char_traits.append(Trait.LeEq);
+    try char_traits.append(Trait.Le);
+    try char_traits.append(Trait.Gr);
+
+    try ctx.trait_map.put("Char", char_traits);
+
+    var char_implems = ArrayList(analyser.funcPair).init(allocator);
+
+    // Char + char -> char
+    try createTraitWithBinOperators(
+        &char_implems,
+        char_type.decided,
+        char_type.decided,
+        &[_]ast.binOperator{ .Plus, .Minus },
+        allocator,
+    );
+
+    // Char + int -> char
+    try createTraitWithBinOperators(
+        &char_implems,
+        int_type.decided,
+        char_type.decided,
+        &[_]ast.binOperator{ .Plus, .Minus },
+        allocator,
+    );
+
+    // char == char -> bool
+    try createTraitWithBinOperators(
+        &char_implems,
+        char_type.decided,
+        bool_type.decided,
+        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
+        allocator,
+    );
+
+    // char == int -> bool
+    try createTraitWithBinOperators(
+        &char_implems,
+        int_type.decided,
+        bool_type.decided,
+        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
+        allocator,
+    );
+
+    try ctx.type_implem.put(
+        "Char",
+        char_implems,
+    );
+
+    // +———————————————————————————————————+
+    // |   STRING TRAITS AND OPERATION     |
+    // +———————————————————————————————————+
+    var string_traits = ArrayList(Trait).init(allocator);
+    try string_traits.append(Trait.Add);
+    try string_traits.append(Trait.Eq);
+
+    try ctx.trait_map.put("String", string_traits);
+
+    var string_implems = ArrayList(analyser.funcPair).init(allocator);
+
+    // String + char -> String
+    try createTraitWithBinOperators(
+        &string_implems,
+        char_type.decided,
+        string_type.decided,
+        &[_]ast.binOperator{.Plus},
+        allocator,
+    );
+
+    // string == string -> bool
+    try createTraitWithBinOperators(
+        &string_implems,
+        string_type.decided,
+        bool_type.decided,
+        &[_]ast.binOperator{ .Equal, .NotEqual },
+        allocator,
+    );
+
+    try ctx.type_implem.put(
+        "String",
+        string_implems,
     );
 }
 
@@ -378,6 +494,11 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
         },
         .freeKeyword => |freekwd| {
             try traitUnion(&ret, &try getTypeTraits(freekwd.val, ctx, allocator));
+        },
+        .Print => |print| {
+            for (print.args.items) |arg| {
+                try traitUnion(&ret, &try getTypeTraits(arg, ctx, allocator));
+            }
         },
         else => {
             std.debug.print("Unimplemented {}", .{instruction});

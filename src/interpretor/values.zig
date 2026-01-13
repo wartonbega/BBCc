@@ -23,6 +23,7 @@ pub const Value = union(enum) {
     Int: i32,
     Bool: bool,
     Null: void,
+    Char: u8,
     Function: *ast.funcDef,
     Object: struct {
         name: []const u8,
@@ -39,6 +40,11 @@ pub fn Plus(self: Value, other: Value, ctx: *Context, reference: []const u8) Val
     return switch (self) {
         .Int => switch (other) {
             .Int => Value{ .Int = self.Int + other.Int },
+            .Char => Value{ .Int = self.Int + other.Char },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        },
+        .Char => switch (other) {
+            .Int => Value{ .Char = @intCast(self.Char + other.Int) },
             else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
         },
         else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
@@ -50,9 +56,14 @@ pub fn Minus(self: Value, other: Value, ctx: *Context, reference: []const u8) Va
     return switch (self) {
         .Int => switch (other) {
             .Int => Value{ .Int = self.Int - other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract non-integer values" } },
+            .Char => Value{ .Int = self.Int - other.Char },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract non-integer values" } },
+        .Char => switch (other) {
+            .Int => Value{ .Char = @intCast(self.Char - other.Int) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
     };
 }
 

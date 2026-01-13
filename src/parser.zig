@@ -34,6 +34,8 @@ pub const TokenType = enum {
     STRUCT,
     ENUM,
     FREE,
+    PRINT,
+    PRINTLN,
 
     IDENT, // identifier
     INTLIT, // Integer literal
@@ -102,6 +104,12 @@ fn getIdentType(ident: []const u8) TokenType {
     }
     if (std.mem.eql(u8, ident, "null")) {
         return TokenType.NULL_KW;
+    }
+    if (std.mem.eql(u8, ident, "print")) {
+        return TokenType.PRINT;
+    }
+    if (std.mem.eql(u8, ident, "println")) {
+        return TokenType.PRINTLN;
     }
     return TokenType.IDENT;
 }

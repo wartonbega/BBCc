@@ -21,6 +21,9 @@ pub fn print(val: Values.Value) void {
         .Error => |e| {
             std.debug.print("ErrorUnion: {s} at {s}", .{ e.message, e.reference });
         },
+        .Char => |c| {
+            std.debug.print("{c}", .{c});
+        },
     }
 }
 

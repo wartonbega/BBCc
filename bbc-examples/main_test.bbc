@@ -2,9 +2,8 @@ func test(Int a, Int b) !Int {
     a / b
 }
 
-func main () !Int {
-    let a = if (1 < 0) {
-        test(1, 0)
-    } else test(1, 0)
-    a
+func main () Int {
+    let a = 'a' + 1
+    println(a)
+    0
 }

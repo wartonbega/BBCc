@@ -114,6 +114,8 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator
     //  | {scope}
     //  | func (args) retype -> {}
     //  | free value
+    //  | print(value*)
+    //  | println(value*)
 
     switch ((try reader.peek()).type) {
         TokenType.IF => {
@@ -296,6 +298,16 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator
             ret.* = ast.Value{ .freeKeyword = .{
                 .val = try lexeValue7(reader, allocator),
                 .reference = free_tok.pos,
+            } };
+            return ret;
+        },
+        TokenType.PRINT, TokenType.PRINTLN => |tok| {
+            const print_token = reader.consume(tok);
+            const ret = try allocator.create(ast.Value);
+            ret.* = ast.Value{ .Print = .{
+                .args = try lexeListedValue(reader, allocator),
+                .ln = tok == .PRINTLN,
+                .reference = print_token.pos,
             } };
             return ret;
         },

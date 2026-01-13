@@ -257,6 +257,15 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
         .freeKeyword => |_| {
             return CreateTypeVoid(allocator, false);
         },
+        .Print => |print| {
+            var has_error = false;
+            for (print.args.items) |arg| {
+                const arg_t = try getTypeOfValue(arg, ctx, allocator);
+                if (arg_t == .decided and arg_t.decided.err)
+                    has_error = true;
+            }
+            return CreateTypeVoid(allocator, has_error);
+        },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
             unreachable;
@@ -624,6 +633,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             }
         },
         .freeKeyword => |_| {},
+        .Print => {},
         else => {
             std.debug.print("Unimplemented {}\n", .{value});
             unreachable;

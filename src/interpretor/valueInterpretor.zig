@@ -78,6 +78,7 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         //.binaryOperator => |binop| {},
         .intLit => |i| return Value{ .Int = i.value },
         .boolLit => |b| return Value{ .Bool = b.value },
+        .charLit => |c| return Value{ .Char = c.value },
         .nullLit => return Value{ .Null = {} },
         .errorCheck => |err_c| {
             const ret = try interpreteValue(err_c.value, ctx);
@@ -118,6 +119,16 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
                 return try interpreteValue(elsescope, ctx);
         },
         .parenthesis => |par| return interpreteValue(par, ctx),
+        .Print => |p| {
+            if (p.ln) {
+                for (p.args.items) |arg|
+                    Print.print(try interpreteValue(arg, ctx));
+                std.debug.print("\n", .{});
+            } else {
+                for (p.args.items) |arg|
+                    Print.print(try interpreteValue(arg, ctx));
+            }
+        },
         else => {
             std.debug.print("uniplemented {}", .{value.*});
             unreachable;
