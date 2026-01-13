@@ -50,10 +50,10 @@
 // --------- CONDITION TEST ----------
 // func main () !Int {
 //     let a = if 2 == 2 {
-//         3
-//     } else {
-//         4
-//     }
+//              3
+//          } else {
+//              4
+//          }
 //     a
 // }
 
@@ -64,12 +64,47 @@ struct Vec2 {
     Int y
 }
 
-implement Add for Vec2 {
-    
+func Vec2Free (Vec2 this) Void {
+    if (this != null) {
+        if (this._count == 0) {
+            free this
+        }
+    }
+}
+
+
+// implement Add for Vec2 {
+//     func Addition (Vec2 this, Vec2 other) Vec2 {
+//         @Vec2 {
+//             x = thix.x + other.x
+//             y = this.y + other.y
+//         }
+//     }
+// }
+// 
+
+func Addition (Vec2 this, Vec2 other) Vec2 {
+    @Vec2 {
+        x = this.x + other.x,
+        y = this.y + other.y
+    }
+}
+
+func test () Vec2 {
+    @Vec2 {
+        x = 87,
+        y = 2
+    }
 }
 
 func main () !Int {
-    let a = 
-
-    a
+    let a = test()
+    let b = test()
+    2
 }
+
+// --------- BASIC TEST ----------
+// func main () !Int {
+//     let a = 1 + 2
+//     a
+// }

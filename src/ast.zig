@@ -49,10 +49,6 @@ pub const Type = struct {
             buf[idx] = '!';
             idx += 1;
         }
-        for (0..@intCast(self.references)) |_| {
-            buf[idx] = '*';
-            idx += 1;
-        }
         _ = switch (self.base) {
             .name => |name| for (name) |c| {
                 buf[idx] = c;
@@ -252,6 +248,9 @@ pub const Value = union(enum) {
         value: u8,
         reference: []const u8,
     },
+    nullLit: struct {
+        reference: []const u8,
+    },
     identifier: struct {
         name: []const u8,
         reference: []const u8,
@@ -281,14 +280,14 @@ pub const Value = union(enum) {
             std.debug.print("    ", .{});
         }
         _ = switch (self.*) {
-            .intLit => std.debug.print("{d}\n", .{self.intLit}),
-            .stringLit => std.debug.print("{s}\n", .{self.stringLit}),
-            .charLit => std.debug.print("{c}\n", .{self.charLit}),
+            .intLit => std.debug.print("{d}\n", .{self.intLit.value}),
+            .stringLit => std.debug.print("{s}\n", .{self.stringLit.value}),
+            .charLit => std.debug.print("{c}\n", .{self.charLit.value}),
             .parenthesis => {
                 std.debug.print("parenthesis :\n", .{});
                 self.parenthesis.print(rec + 1);
             },
-            .identifier => std.debug.print("identifier {s}\n", .{self.identifier}),
+            .identifier => std.debug.print("identifier {s}\n", .{self.identifier.name}),
             .binaryOperator => self.binaryOperator.print(rec),
             .assignement => {
                 std.debug.print("= (assignation)\n", .{});
@@ -306,6 +305,7 @@ pub const Value = union(enum) {
             .charLit => |value| value.reference,
             .boolLit => |value| value.reference,
             .stringLit => |value| value.reference,
+            .nullLit => |value| value.reference,
             .identifier => |value| value.reference,
             .parenthesis => |value| value.getReference(),
             .unaryOperatorRight => |value| value.reference,
@@ -320,6 +320,7 @@ pub const Value = union(enum) {
             .function => |value| value.reference,
             .structInit => |value| value.reference,
             .freeKeyword => |value| value.reference,
+
             .NULL => "",
         };
     }
@@ -398,6 +399,16 @@ pub const structDef = struct {
     pub fn getHabitant(self: *structDef, name: []const u8) *Type {
         return self.habitants.get(name).?;
     }
+
+    pub fn print(self: *structDef) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        std.debug.print("Struct {s} : \n", .{self.name});
+        var it = self.habitants.iterator();
+        while (it.next()) |hab| {
+            std.debug.print("\t+ {s} : {s} \n", .{ hab.key_ptr.*, hab.value_ptr.*.toString(arena.allocator()) });
+        }
+    }
 };
 
 pub const ProgInstructions = union(enum) {
@@ -406,6 +417,7 @@ pub const ProgInstructions = union(enum) {
     pub fn print(self: *ProgInstructions) void {
         switch (self.*) {
             .FuncDef => self.FuncDef.print(),
+            .StructDef => self.StructDef.print(),
         }
     }
 };

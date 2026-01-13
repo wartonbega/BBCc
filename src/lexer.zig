@@ -100,7 +100,7 @@ pub fn lexeListedValue(reader: *tokenReader, allocator: Allocator) !ArrayList(*a
     return ret;
 }
 
-pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
+pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator.Error || lexerError || std.fmt.ParseIntError)!*ast.Value {
     // Value7:
     //  | IF value0 value0
     //  | WHILE value0 value0
@@ -263,6 +263,12 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                 .value = boollit == .TRUE,
                 .reference = val.pos,
             } };
+            return ret;
+        },
+        TokenType.NULL_KW => {
+            const val = reader.consume(TokenType.NULL_KW);
+            const ret = try allocator.create(ast.Value);
+            ret.* = ast.Value{ .nullLit = .{ .reference = val.pos } };
             return ret;
         },
         TokenType.FN_DEC => {

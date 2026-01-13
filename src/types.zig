@@ -122,11 +122,17 @@ pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Conte
 
 pub fn getTypeOfScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) std.mem.Allocator.Error!Type {
     _ = ctx;
+    var has_error = false;
     if (scope.code.items.len > 0) {
         for (scope.code.items[0 .. scope.code.items.len - 1]) |value| {
-            _ = try getTypeOfValue(value, scope.ctx, allocator);
+            const sec_ret = try getTypeOfValue(value, scope.ctx, allocator);
+            if (sec_ret == .decided and sec_ret.decided.err)
+                has_error = true;
         }
-        return try getTypeOfValue(scope.code.getLast(), scope.ctx, allocator);
+        const ret = try getTypeOfValue(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator);
+        if (ret == .decided)
+            return try duplicateWithErrorUnion(allocator, ret.decided, ret.decided.err or has_error);
+        return ret;
     }
     return CreateTypeVoid(allocator, false);
 }
@@ -138,6 +144,7 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
         .charLit => try CreateTypeChar(allocator, false),
         .varDec => try CreateTypeVoid(allocator, false),
         .boolLit => try CreateTypeBool(allocator, false),
+        .nullLit => return CreateTypeVoid(allocator, false),
         .assignement => |assign| blk: {
             const rhs_type = try getTypeOfValue(assign.rhs, ctx, allocator);
             if (rhs_type == .undecided)
@@ -230,6 +237,8 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
             const name = stc_init.name;
             const ret_ast_type = try allocator.create(ast.Type);
             ret_ast_type.base = .{ .name = name };
+            ret_ast_type.err = false;
+            ret_ast_type.references = 0;
             return Type{ .decided = ret_ast_type };
         },
         .unaryOperatorRight => |uop_right| {
@@ -480,8 +489,9 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             if (!ctx.variableExist(ident.name))
                 errors.bbcErrorExit("The variable {s} is not declared (infer)", .{ident.name}, "");
             if (!ctx.getVariable(ident.name).matchType(real_exp_type))
-                errors.bbcErrorExit("The expected type {s}  does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, ctx.getVariable(ident.name).toString(allocator) }, ident.reference);
-            try ctx.setVariable(ident.name, real_exp_type);
+                errors.bbcErrorExit("The expected type {s} does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, ctx.getVariable(ident.name).toString(allocator) }, ident.reference);
+            if (!ctx.variableExist(ident.name) or ctx.getVariable(ident.name) != .decided)
+                try ctx.setVariable(ident.name, real_exp_type);
         },
         .assignement => |assign| {
             const rhsType = try getTypeOfValue(assign.rhs, ctx, allocator);
@@ -507,8 +517,9 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                     } else rhsType; // We can just set it without copying, it's alright
                     switch (lhsType) {
                         .decided => {
-                            if (!real_right_type.matchType(lhsType))
-                                errors.bbcErrorExit("The right side's type ({s}) of the assignation does not match the left side's {s}", .{ real_right_type.toString(allocator), lhsType.toString(allocator) }, assign.reference);
+                            if (!real_right_type.matchType(lhsType)) {
+                                errors.bbcErrorExit("£The right side's type {s} of the assignation does not match the left side's {s}", .{ real_right_type.toString(allocator), lhsType.toString(allocator) }, assign.reference);
+                            }
                         },
                         .undecided => {
                             try inferTypeValue(assign.lhs, ctx, allocator, real_right_type);
@@ -536,6 +547,10 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .stringLit => {
             if (!stringType.matchType(expType))
                 errors.bbcErrorExit("Expected type {s} but it evaluates to String", .{expType.toString(allocator)}, value.getReference());
+        },
+        .nullLit => {
+            if (!voidType.matchType(expType))
+                errors.bbcErrorExit("Expected type {s} but it evaluates to Void", .{expType.toString(allocator)}, value.getReference());
         },
         .scope => |scope| {
             try inferTypeScope(scope, ctx, allocator, expType);
@@ -577,7 +592,6 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             if (!expType.matchType(bool_type))
                 errors.bbcErrorExit("Expected type '{s}' but the bool literal evaluates to 'Bool'", .{expType.toString(allocator)}, value.getReference());
         },
-
         .structInit => |stc_init| {
             const name = stc_init.name;
             if (!ctx.typeDefExist(name))
@@ -624,10 +638,8 @@ pub fn inferTypeScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator, re
         return;
     _ = ctx;
     try inferTypeValue(items[items.len - 1], scope.ctx, allocator, rettype);
-    var i: usize = items.len - 1;
-    while (i > 1) {
-        i -= 1;
-        const value = items[i];
+
+    for (items[0 .. items.len - 1]) |value| {
         try inferTypeValue(value, scope.ctx, allocator, voidType);
     }
 

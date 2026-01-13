@@ -22,3 +22,14 @@ pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: []const u8) vo
     stderr.print("\n", .{}) catch {};
     exit(0);
 }
+
+pub fn bbcRuntimeError(comptime val: []const u8, args: anytype, pos: []const u8) void {
+    stderr.print("Runtime error at {s}:\n", .{pos}) catch {
+        return;
+    };
+    stderr.print(val, args) catch {
+        return;
+    };
+    stderr.print("\n", .{}) catch {};
+    exit(0);
+}

@@ -13,10 +13,51 @@ pub const Location = union(enum) {
     argument: usize, // The number of the argument: 0 to \infnity
     void: void,
 };
-// r15 is reserved for the dumpers for swapping values
-pub const Registers = enum { r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14 };
 
-pub const RegIter = [_]Registers{ .r0, .r1, .r2, .r3, .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r11, .r12, .r13, .r14 };
+// The 'duration' of a value in the IR
+// - scratch means a very short duration, e.g. placing an immediate into the stack
+//   performing a small computation, etc... => scratch registers
+// - mid means a value that should be stored across one or more function call
+//   => callee saved
+pub const DurationPriority = enum {
+    scratch, // Only used
+    mid,
+    long,
+};
+
+pub const REGISTER_NB = 14;
+
+pub const Registers = enum {
+    r0, // rax
+    r1, // rbx
+    r2, // rcx
+    r3, // rdx
+    r4, // rsi
+    r5, // rdi
+    r6, // r8
+    r7, // r9
+    r8, // r10
+    r9, // r11
+    r10, // r12
+    r11, // r13
+    r12, // r14
+    r13, // r15
+};
+
+pub const RegIter = [_]Registers{ .r0, .r1, .r2, .r3, .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r11, .r12, .r13 };
+
+// rax, rdi, rsi, rdx, rcx, r8, r9, r10, r11
+pub const ScratchReg = [_]Registers{ .r0, .r7, .r8, .r9 };
+
+// rbx, rsp, rbp, r12, r13, r14, and r15                                       // from here, technically scratch
+pub const CalleeSave = [_]Registers{ .r1, .r10, .r11, .r12, .r13, .r2, .r3, .r5, .r4, .r6 };
+
+pub fn in(reg: Registers, list: []const Registers) bool {
+    for (list) |r| {
+        if (reg == r) return true;
+    }
+    return false;
+}
 
 fn registerIndex(reg: Registers) usize {
     return switch (reg) {
@@ -34,15 +75,14 @@ fn registerIndex(reg: Registers) usize {
         .r11 => @intCast(11),
         .r12 => @intCast(12),
         .r13 => @intCast(13),
-        .r14 => @intCast(14),
     };
 }
 
 pub const RegisterTable = struct {
-    utilised: [15]bool,
+    utilised: [REGISTER_NB]bool,
 
     pub fn init() RegisterTable {
-        return RegisterTable{ .utilised = [_]bool{false} ** 15 };
+        return RegisterTable{ .utilised = [_]bool{false} ** REGISTER_NB };
     }
 
     pub fn getRegister(self: *RegisterTable, reg: Registers) bool {
@@ -115,55 +155,24 @@ pub const varContentType = std.ArrayList(struct {
     content: u32,
 });
 
+const binInstruction = struct { x: Location, y: Location };
+
 pub const Instructions = union(enum) {
-    Plus: struct {
-        x: Location,
-        y: Location,
-    },
     addImmediate: struct {
         x: Location,
         y: i64,
     },
-    Minus: struct {
-        x: Location,
-        y: Location,
-    },
-    Multiply: struct {
-        x: Location,
-        y: Location,
-    },
-    Divide: struct {
-        x: Location,
-        y: Location,
-    },
-    Modulo: struct {
-        x: Location,
-        y: Location,
-    },
-    Equal: struct {
-        x: Location,
-        y: Location,
-    },
-    NotEqual: struct {
-        x: Location,
-        y: Location,
-    },
-    LessThan: struct {
-        x: Location,
-        y: Location,
-    },
-    LessEqual: struct {
-        x: Location,
-        y: Location,
-    },
-    GreaterThan: struct {
-        x: Location,
-        y: Location,
-    },
-    GreaterEqual: struct {
-        x: Location,
-        y: Location,
-    },
+    Plus: binInstruction,
+    Minus: binInstruction,
+    Multiply: binInstruction,
+    Divide: binInstruction,
+    Modulo: binInstruction,
+    Equal: binInstruction,
+    NotEqual: binInstruction,
+    LessThan: binInstruction,
+    LessEqual: binInstruction,
+    GreaterThan: binInstruction,
+    GreaterEqual: binInstruction,
     Not: Location,
     writeArrayElement: struct { // To write at a specific index of an array (fat-pointed)
         arr: Location,
@@ -285,6 +294,7 @@ pub const Instructions = union(enum) {
 
 pub const Builder = struct {
     code: Prog,
+    position: usize,
     stack_state: HashMap,
     allocator: Allocator,
 
@@ -294,187 +304,319 @@ pub const Builder = struct {
             .code = list,
             .stack_state = HashMap.init(alloc),
             .allocator = alloc,
+            .position = 0,
         };
     }
 
+    pub fn getPosition(self: *Builder) builderPos {
+        return builderPos{ .index = self.position };
+    }
+
+    pub fn setPosition(self: *Builder, pos: builderPos) void {
+        switch (pos) {
+            .index => |idx| {
+                self.position = idx;
+            },
+            .last => {
+                self.position = self.code.items.len;
+            },
+        }
+    }
+
+    pub fn shiftStackBetween(self: *Builder, pos1: builderPos, pos2: builderPos, amount: i64) void {
+        const p1 = if (pos1 == .index) pos1.index else self.code.items.len;
+        const p2 = if (pos2 == .index) pos2.index else self.code.items.len;
+        for (p1..p2) |i| {
+            const inst = self.code.items[i];
+            var inst_mut = inst;
+            switch (inst_mut) {
+                .Plus, .Minus, .Multiply, .Divide, .Modulo, .Equal, .NotEqual, .LessThan, .LessEqual, .GreaterThan, .GreaterEqual => |*bin| {
+                    if (bin.x == .stack) bin.x.stack += @intCast(amount);
+                    if (bin.y == .stack) bin.y.stack += @intCast(amount);
+                },
+                .addImmediate => |*ai| {
+                    if (ai.x == .stack) ai.x.stack += @intCast(amount);
+                },
+                .Not, .getBasePointer, .getStackPointer, .Return, .ExitWith, .Print, .heapFree, .incrementeReferenceCounter, .decrementReferenceCounter, .pushValue, .popValue => |*loc| {
+                    if (loc.* == .stack) loc.stack += @intCast(amount);
+                },
+                .writeArrayElement => |*wae| {
+                    if (wae.arr == .stack) wae.arr.stack += @intCast(amount);
+                    if (wae.value == .stack) wae.value.stack += @intCast(amount);
+                },
+                .Move => |*mv| {
+                    if (mv.from == .stack) mv.from.stack += @intCast(amount);
+                    if (mv.to == .stack) mv.to.stack += @intCast(amount);
+                },
+                .Load => |*ld| {
+                    if (ld.from == .stack) ld.from.stack += @intCast(amount);
+                    if (ld.to == .stack) ld.to.stack += @intCast(amount);
+                },
+                .loadAddress => |*la| {
+                    if (la.from == .stack) la.from.stack += @intCast(amount);
+                    if (la.to == .stack) la.to.stack += @intCast(amount);
+                },
+                .CopyOnStack => |*cos| {
+                    if (cos.from == .stack) cos.from.stack += @intCast(amount);
+                },
+                .IntLit => |*il| {
+                    if (il.to == .stack) il.to.stack += @intCast(amount);
+                },
+                .CharLit => |*cl| {
+                    if (cl.to == .stack) cl.to.stack += @intCast(amount);
+                },
+                .Funcall => |*fc| {
+                    if (fc.func == .stack) fc.func.stack += @intCast(amount);
+                    for (fc.args.items) |*a| {
+                        if (a.* == .stack) a.stack += @intCast(amount);
+                    }
+                },
+                .heapAlloc => |*ha| {
+                    if (ha.dest == .stack) ha.dest.stack += @intCast(amount);
+                },
+                .writeToPointer => |*wtp| {
+                    if (wtp.dest == .stack) wtp.dest.stack += @intCast(amount);
+                    if (wtp.content == .stack) wtp.content.stack += @intCast(amount);
+                },
+                .readFromPointer => |*rfp| {
+                    if (rfp.dest == .stack) rfp.dest.stack += @intCast(amount);
+                    if (rfp.origin == .stack) rfp.origin.stack += @intCast(amount);
+                },
+                else => {},
+            }
+            self.code.items[i] = inst_mut;
+        }
+    }
+
     pub fn addInstruction(self: *Builder, inst: Instructions) !void {
-        try self.code.append(inst);
+        try self.code.insert(self.position, inst);
+        self.position += 1;
     }
 
     pub fn reserveStack(self: *Builder, size: i32) !void {
-        try self.code.append(Instructions{ .reserveStack = size });
+        try self.code.insert(self.position, Instructions{ .reserveStack = size });
+        self.position += 1;
     }
 
     pub fn decreaseStack(self: *Builder, _type: Type) !void {
-        try self.code.append(Instructions{ .decreaseStack = _type });
+        try self.code.insert(self.position, Instructions{ .decreaseStack = _type });
+        self.position += 1;
     }
 
     pub fn writeArrayElement(self: *Builder, arr: Location, idx: usize, value: Location, _type: Type) !void {
-        try self.code.append(Instructions{ .writeArrayElement = .{ .arr = arr, .idx = idx, .value = value, ._type = _type } });
+        try self.code.insert(self.position, Instructions{ .writeArrayElement = .{ .arr = arr, .idx = idx, .value = value, ._type = _type } });
+        self.position += 1;
     }
 
     pub fn getBasePointer(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .getBasePointer = loc });
+        try self.code.insert(self.position, Instructions{ .getBasePointer = loc });
+        self.position += 1;
     }
 
     pub fn getStackPointer(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .getStackPointer = loc });
+        try self.code.insert(self.position, Instructions{ .getStackPointer = loc });
+        self.position += 1;
     }
 
     pub fn comment(self: *Builder, com: []const u8) !void {
-        try self.code.append(Instructions{ .Comment = com });
+        try self.code.insert(self.position, Instructions{ .Comment = com });
+        self.position += 1;
     }
 
     pub fn conditionalJump(self: *Builder, val: Location, label: []const u8) !void {
-        try self.code.append(Instructions{ .ConditionalJump = .{ .value = val, .label = label } });
+        try self.code.insert(self.position, Instructions{ .ConditionalJump = .{ .value = val, .label = label } });
+        self.position += 1;
     }
 
     pub fn jump(self: *Builder, label: []const u8) !void {
-        try self.code.append(Instructions{ .Jump = .{ .label = label } });
+        try self.code.insert(self.position, Instructions{ .Jump = .{ .label = label } });
+        self.position += 1;
     }
 
     pub fn functionDec(self: *Builder, name: []const u8) !void {
-        try self.code.append(Instructions{ .Function = name });
+        try self.code.insert(self.position, Instructions{ .Function = name });
+        self.position += 1;
     }
 
     pub fn beginFunction(self: *Builder) !void {
-        try self.code.append(Instructions{ .BeginFunction = {} });
+        try self.code.insert(self.position, Instructions{ .BeginFunction = {} });
+        self.position += 1;
     }
 
     pub fn endFunction(self: *Builder) !void {
-        try self.code.append(Instructions{ .EndFunction = {} });
+        try self.code.insert(self.position, Instructions{ .EndFunction = {} });
+        self.position += 1;
     }
 
     pub fn returnInst(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .Return = loc });
+        try self.code.insert(self.position, Instructions{ .Return = loc });
+        self.position += 1;
     }
 
     pub fn moveInst(self: *Builder, from: Location, to: Location, _type: Type) !void {
-        try self.code.append(Instructions{ .Move = .{ .from = from, .to = to, ._type = _type } });
+        try self.code.insert(self.position, Instructions{ .Move = .{ .from = from, .to = to, ._type = _type } });
+        self.position += 1;
     }
 
     pub fn load(self: *Builder, from: Location, to: Location) !void {
-        try self.code.append(Instructions{ .Load = .{ .from = from, .to = to } });
+        try self.code.insert(self.position, Instructions{ .Load = .{ .from = from, .to = to } });
+        self.position += 1;
     }
 
     pub fn loadAddress(self: *Builder, from: Location, to: Location) !void {
-        try self.code.append(Instructions{ .loadAddress = .{ .from = from, .to = to } });
+        try self.code.insert(self.position, Instructions{ .loadAddress = .{ .from = from, .to = to } });
+        self.position += 1;
     }
 
     pub fn intLit(self: *Builder, val: i64, to: Location) !void {
-        try self.code.append(Instructions{ .IntLit = .{ .val = val, .to = to } });
+        try self.code.insert(self.position, Instructions{ .IntLit = .{ .val = val, .to = to } });
+        self.position += 1;
     }
 
     pub fn charLit(self: *Builder, val: u8, to: Location) !void {
-        try self.code.append(Instructions{ .CharLit = .{ .val = val, .to = to } });
+        try self.code.insert(self.position, Instructions{ .CharLit = .{ .val = val, .to = to } });
+        self.position += 1;
     }
 
     pub fn exitWith(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .ExitWith = loc });
+        try self.code.insert(self.position, Instructions{ .ExitWith = loc });
+        self.position += 1;
     }
 
     pub fn print(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .Print = loc });
+        try self.code.insert(self.position, Instructions{ .Print = loc });
+        self.position += 1;
     }
 
     pub fn plus(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .Plus = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .Plus = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn addImmediate(self: *Builder, x: Location, y: i64) !void {
-        try self.code.append(Instructions{ .addImmediate = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .addImmediate = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn minus(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .Minus = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .Minus = .{ .x = x, .y = y } });
+        self.position += 1;
     }
+
     pub fn multiply(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .Multiply = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .Multiply = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn divide(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .Divide = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .Divide = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn modulo(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .Modulo = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .Modulo = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn not(self: *Builder, x: Location) !void {
-        try self.code.append(Instructions{ .Not = x });
+        try self.code.insert(self.position, Instructions{ .Not = x });
+        self.position += 1;
     }
 
     pub fn equal(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .Equal = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .Equal = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn notEqual(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .NotEqual = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .NotEqual = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn lessThan(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .LessThan = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .LessThan = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn lessEqual(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .LessEqual = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .LessEqual = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn greaterThan(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .GreaterThan = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .GreaterThan = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn greaterEqual(self: *Builder, x: Location, y: Location) !void {
-        try self.code.append(Instructions{ .GreaterEqual = .{ .x = x, .y = y } });
+        try self.code.insert(self.position, Instructions{ .GreaterEqual = .{ .x = x, .y = y } });
+        self.position += 1;
     }
 
     pub fn funcall(self: *Builder, func: Location, args: Array(Location)) !void {
-        try self.code.append(Instructions{ .Funcall = .{ .func = func, .args = args } });
+        try self.code.insert(self.position, Instructions{ .Funcall = .{ .func = func, .args = args } });
+        self.position += 1;
     }
 
     pub fn declareVariable(self: *Builder, name: []const u8, content: *const varContentType) !void {
-        try self.code.append(Instructions{ .declareVariable = .{ .name = name, .content = content.* } });
+        try self.code.insert(self.position, Instructions{ .declareVariable = .{ .name = name, .content = content.* } });
+        self.position += 1;
     }
 
     pub fn beginVariableSection(self: *Builder) !void {
-        try self.code.append(Instructions{ .beginVariableSection = {} });
+        try self.code.insert(self.position, Instructions{ .beginVariableSection = {} });
+        self.position += 1;
     }
 
     pub fn labelDec(self: *Builder, name: []const u8) !void {
-        try self.code.append(Instructions{ .Label = name });
+        try self.code.insert(self.position, Instructions{ .Label = name });
+        self.position += 1;
     }
 
     pub fn heapAlloc(self: *Builder, size: i64, dest: Location) !void {
-        try self.code.append(Instructions{ .heapAlloc = .{ .dest = dest, .size = size } });
+        try self.code.insert(self.position, Instructions{ .heapAlloc = .{ .dest = dest, .size = size } });
+        self.position += 1;
     }
 
     pub fn heapFree(self: *Builder, dest: Location) !void {
-        try self.code.append(Instructions{ .heapFree = dest });
+        try self.code.insert(self.position, Instructions{ .heapFree = dest });
+        self.position += 1;
     }
 
     pub fn writeToPointer(self: *Builder, dest: Location, decal: i64, content: Location) !void {
-        try self.code.append(Instructions{ .writeToPointer = .{ .content = content, .decal = decal, .dest = dest } });
+        try self.code.insert(self.position, Instructions{ .writeToPointer = .{ .content = content, .decal = decal, .dest = dest } });
+        self.position += 1;
     }
 
     pub fn readFromPointer(self: *Builder, dest: Location, decal: i64, origin: Location) !void {
-        try self.code.append(Instructions{ .readFromPointer = .{ .dest = dest, .decal = decal, .origin = origin } });
+        try self.code.insert(self.position, Instructions{ .readFromPointer = .{ .dest = dest, .decal = decal, .origin = origin } });
+        self.position += 1;
     }
 
     pub fn incrementeReferenceCounter(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .incrementeReferenceCounter = loc });
+        try self.code.insert(self.position, Instructions{ .incrementeReferenceCounter = loc });
+        self.position += 1;
     }
 
     pub fn decrementReferenceCounter(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .decrementReferenceCounter = loc });
+        try self.code.insert(self.position, Instructions{ .decrementReferenceCounter = loc });
+        self.position += 1;
     }
 
     pub fn pushValue(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .pushValue = loc });
+        try self.code.insert(self.position, Instructions{ .pushValue = loc });
+        self.position += 1;
     }
 
     pub fn popValue(self: *Builder, loc: Location) !void {
-        try self.code.append(Instructions{ .popValue = loc });
+        try self.code.insert(self.position, Instructions{ .popValue = loc });
+        self.position += 1;
     }
+};
+
+pub const builderPos = union(enum) {
+    index: usize,
+    last: void,
 };
 
 pub const FuncContexte = struct {

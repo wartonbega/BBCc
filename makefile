@@ -2,6 +2,11 @@
 .phony: 
 	compile_compiler
 
+SOURCE?=bbc-examples/basic_test.bbc
+
+run_interpretor: compile_compiler
+	./zig-out/bin/bbc $(SOURCE)
+
 run_arm: a.out
 	arch -x86_64 ./a.out || (echo "\noutput: $$?"; exit 0)
 

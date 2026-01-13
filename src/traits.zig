@@ -27,11 +27,41 @@ pub const Trait = enum {
 const TraitHashmap = std.hash_map.StringHashMap(ArrayList(Trait));
 const TypeTraitHashmap = std.hash_map.StringHashMap(ArrayList(Trait));
 
+pub fn createTraitWithBinOperator(type_implems: *ArrayList(analyser.funcPair), other: *ast.Type, ret: *ast.Type, binop: ast.binOperator, allocator: std.mem.Allocator) !void {
+    try type_implems.append(.{
+        .name = ast.binOpFuncName(binop),
+        .signature = ast.TypeFunc{
+            .argtypes = blk: {
+                var args = ArrayList(*ast.Type).init(allocator);
+                try args.append(other);
+                break :blk args;
+            },
+            .retype = ret,
+            .typeparam = ArrayList(ast.TypeParam).init(allocator),
+            .fname = stringFromTrait(traitFromOperator(binop)),
+        },
+    });
+}
+
+pub fn createTraitWithBinOperators(type_implems: *ArrayList(analyser.funcPair), other: *ast.Type, ret: *ast.Type, binops: []const ast.binOperator, allocator: std.mem.Allocator) !void {
+    for (binops) |op| {
+        try createTraitWithBinOperator(
+            type_implems,
+            other,
+            ret,
+            op,
+            allocator,
+        );
+    }
+}
+
 pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !void {
     // Create the Int type
     var int_traits = ArrayList(Trait).init(allocator);
     const int_type = try Types.CreateTypeInt(allocator, false);
+    const int_type_err = try Types.CreateTypeInt(allocator, true);
     const bool_type = try Types.CreateTypeBool(allocator, false);
+    const void_type = try Types.CreateTypeVoid(allocator, false);
     try int_traits.append(Trait.Add);
     try int_traits.append(Trait.Sub);
     try int_traits.append(Trait.Mult);
@@ -45,72 +75,52 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
 
     try ctx.trait_map.put("Int", int_traits);
 
-    // Implementing int + int -> int
     var int_implems = ArrayList(analyser.funcPair).init(allocator);
-    for ([_]ast.binOperator{ .Plus, .Minus, .Times, .Modulus }) |op| {
-        try int_implems.append(.{
-            .name = ast.binOpFuncName(op),
-            .signature = ast.TypeFunc{
-                .argtypes = blk: {
-                    var args = ArrayList(*ast.Type).init(allocator);
-                    try args.append(int_type.decided);
-                    break :blk args;
-                },
-                .retype = int_type.decided,
-                .typeparam = ArrayList(ast.TypeParam).init(allocator),
-                .fname = stringFromTrait(traitFromOperator(op)),
-            },
-        });
-    }
+
+    // Implementing int + int -> int
+    try createTraitWithBinOperators(
+        &int_implems,
+        int_type.decided,
+        int_type.decided,
+        &[_]ast.binOperator{ .Plus, .Minus, .Times, .Modulus },
+        allocator,
+    );
 
     // Implementing int / int -> !int
-    try int_implems.append(.{
-        .name = ast.binOpFuncName(.Div),
-        .signature = ast.TypeFunc{
-            .argtypes = blk: {
-                var args = ArrayList(*ast.Type).init(allocator);
-                try args.append(int_type.decided);
-                break :blk args;
-            },
-            .retype = (try Types.CreateTypeInt(allocator, true)).decided,
-            .typeparam = ArrayList(ast.TypeParam).init(allocator),
-            .fname = stringFromTrait(traitFromOperator(.Div)),
-        },
-    });
+    try createTraitWithBinOperator(
+        &int_implems,
+        int_type.decided,
+        int_type_err.decided,
+        .Div,
+        allocator,
+    );
 
     // int + bool -> int
-    for ([_]ast.binOperator{ .Plus, .Minus, .Times }) |op| {
-        try int_implems.append(.{
-            .name = ast.binOpFuncName(op),
-            .signature = ast.TypeFunc{
-                .argtypes = blk: {
-                    var args = ArrayList(*ast.Type).init(allocator);
-                    try args.append(bool_type.decided);
-                    break :blk args;
-                },
-                .retype = int_type.decided,
-                .typeparam = ArrayList(ast.TypeParam).init(allocator),
-                .fname = stringFromTrait(traitFromOperator(op)),
-            },
-        });
-    }
+    try createTraitWithBinOperators(
+        &int_implems,
+        bool_type.decided,
+        int_type.decided,
+        &[_]ast.binOperator{ .Plus, .Minus, .Times },
+        allocator,
+    );
 
     // int == int -> bool
-    for ([_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt }) |op| {
-        try int_implems.append(.{
-            .name = ast.binOpFuncName(op),
-            .signature = ast.TypeFunc{
-                .argtypes = blk: {
-                    var args = ArrayList(*ast.Type).init(allocator);
-                    try args.append(int_type.decided);
-                    break :blk args;
-                },
-                .retype = bool_type.decided,
-                .typeparam = ArrayList(ast.TypeParam).init(allocator),
-                .fname = stringFromTrait(traitFromOperator(op)),
-            },
-        });
-    }
+    try createTraitWithBinOperators(
+        &int_implems,
+        int_type.decided,
+        bool_type.decided,
+        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
+        allocator,
+    );
+
+    // int == void -> bool
+    try createTraitWithBinOperators(
+        &int_implems,
+        void_type.decided,
+        bool_type.decided,
+        &[_]ast.binOperator{ .Equal, .NotEqual },
+        allocator,
+    );
 
     try ctx.type_implem.put(
         "Int",
@@ -280,6 +290,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
         .identifier => {},
         .varDec => {},
         .boolLit => {},
+        .nullLit => {},
         .assignement => |inst| {
             try traitUnion(&ret, &try getTypeTraits(inst.lhs, ctx, allocator));
             try traitUnion(&ret, &try getTypeTraits(inst.rhs, ctx, allocator));
@@ -305,7 +316,11 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             switch (lhs_type) {
                 .decided => |_type| {
                     switch (_type.base) {
-                        .function => errors.bbcErrorExit("'function' like type (here {s}) don't support operations", .{_type.toString(allocator)}, binop.reference),
+                        .function => errors.bbcErrorExit(
+                            "'function' like type (here {s}) don't support operations",
+                            .{_type.toString(allocator)},
+                            binop.reference,
+                        ),
                         .name => |n| {
                             if (!ret.contains(n))
                                 try ret.put(n, ArrayList(Trait).init(allocator));
@@ -346,7 +361,11 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             switch (expr_type) {
                 .decided => |_type| {
                     switch (_type.base) {
-                        .function => errors.bbcErrorExit("'function' like type (here {s}) don't support point attribute", .{_type.toString(allocator)}, uop_right.reference),
+                        .function => errors.bbcErrorExit(
+                            "'function' like type (here {s}) don't support point attribute",
+                            .{_type.toString(allocator)},
+                            uop_right.reference,
+                        ),
                         .name => |n| {
                             if (!ret.contains(n))
                                 try ret.put(n, ArrayList(Trait).init(allocator));

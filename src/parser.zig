@@ -41,6 +41,7 @@ pub const TokenType = enum {
     STRINGLIT,
     TRUE, // Boolean literal
     FALSE,
+    NULL_KW, // Null value
 
     COLON, // :
 
@@ -98,6 +99,9 @@ fn getIdentType(ident: []const u8) TokenType {
     }
     if (std.mem.eql(u8, ident, "free")) {
         return TokenType.FREE;
+    }
+    if (std.mem.eql(u8, ident, "null")) {
+        return TokenType.NULL_KW;
     }
     return TokenType.IDENT;
 }
@@ -180,7 +184,7 @@ const Reader = struct {
         var col = @as(u32, 0);
         for (0..self.pos) |i| {
             if (self.content[i] == '\n') {
-                col = 0;
+                col = 1;
                 line += 1;
             } else {
                 col += 1;

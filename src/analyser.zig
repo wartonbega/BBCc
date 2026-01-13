@@ -398,7 +398,16 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         },
         .assignement => |assing| {
             const rhsType = try analyseValue(assing.rhs, ctx, allocator);
-            try analyseAssignationLhs(assing.lhs, ctx, allocator, rhsType);
+            if (rhsType == .decided) {
+                try analyseAssignationLhs(
+                    assing.lhs,
+                    ctx,
+                    allocator,
+                    try Types.duplicateWithErrorUnion(allocator, rhsType.decided, false),
+                );
+            } else {
+                try analyseAssignationLhs(assing.lhs, ctx, allocator, rhsType);
+            }
 
             return switch (rhsType) {
                 .undecided => Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) },
@@ -444,7 +453,8 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             } else if (!void_type.matchType(base_scope_type)) { // Else statements are required if the evaluation type insn't !Void
                 errors.bbcErrorExit("The if statements evalutates to type '{s}' and not '!Void', so it requires an else clause", .{base_scope_type.toString(allocator)}, ifstmt.reference);
             }
-            return base_scope_type;
+            // base_scope_type.decided.err = has_error;
+            return try Types.duplicateWithErrorUnion(allocator, base_scope_type.decided, has_error);
         },
         .parenthesis => |val| return try analyseValue(val, ctx, allocator),
         .scope => |scope| return try analyseScope(scope, ctx, allocator),
@@ -460,6 +470,7 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         .charLit => return try Types.CreateTypeChar(allocator, false),
         .stringLit => return try Types.CreateTypeString(allocator, false),
         .boolLit => return Types.CreateTypeBool(allocator, false),
+        .nullLit => return Types.CreateTypeVoid(allocator, false),
         .funcall => |func| {
             return try analyseFuncall(func, ctx, allocator);
         },
@@ -467,11 +478,11 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             const val_type = try analyseValue(errcheck.value, ctx, allocator);
             const scope_type = try analyseValue(errcheck.scope, ctx, allocator);
             if (val_type == .decided and !val_type.decided.err)
-                errors.bbcError("The value don't have errors to check", .{}, errcheck.value.getReference());
+                errors.bbcErrorExit("The value don't have errors to check", .{}, errcheck.value.getReference());
             if (scope_type == .decided and scope_type.decided.err)
-                errors.bbcError("The default scope can't have errors", .{}, errcheck.scope.getReference());
+                errors.bbcErrorExit("The default scope can't have errors", .{}, errcheck.scope.getReference());
             if (!scope_type.matchType(val_type))
-                errors.bbcError("The scope's type don't match the value's type", .{}, errcheck.reference);
+                errors.bbcErrorExit("The scope's type don't match the value's type", .{}, errcheck.reference);
             // We can remove the error
             if (val_type == .decided)
                 return Types.duplicateWithErrorUnion(allocator, val_type.decided, false);
@@ -563,11 +574,17 @@ pub fn analyseScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) std.
     allocator.destroy(scope.ctx); // Only works if the allocator used here is the same than in the lexer
 
     scope.ctx = try ctx.createChild(allocator);
+    var has_error = false;
     if (scope.code.items.len > 0) {
         for (scope.code.items[0 .. scope.code.items.len - 1]) |value| {
-            _ = try analyseValue(value, scope.ctx, allocator);
+            const sec_ret = try analyseValue(value, scope.ctx, allocator);
+            if (sec_ret == .decided and sec_ret.decided.err)
+                has_error = true;
         }
-        return try analyseValue(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator);
+        const ret = try analyseValue(scope.code.items[scope.code.items.len - 1], scope.ctx, allocator);
+        if (ret == .decided)
+            return try Types.duplicateWithErrorUnion(allocator, ret.decided, ret.decided.err or has_error);
+        return ret;
     }
     return Types.CreateTypeVoid(allocator, false);
 }
@@ -671,6 +688,42 @@ fn containFunction(func: functionVersion, list: ArrayList(functionVersion)) bool
     return false;
 }
 
+pub fn analyseStructDef(stct: *ast.structDef, ctx: *Context, allocator: Allocator) !void {
+    var hab_it = stct.habitants.iterator();
+    while (hab_it.next()) |hab| {
+        if (!ctx.typeExist(hab.value_ptr.*))
+            errors.bbcErrorExit("The type '{s}' doesn't exist", .{hab.value_ptr.*.toString(allocator)}, stct.reference);
+    }
+    try ctx.addTypeDef(stct.name, stct);
+    const name = try std.fmt.allocPrint(allocator, "{s}Free", .{stct.name});
+    const stc_free_func = ctx.getFunction(name);
+    try ctx.functions_to_compile.append(functionVersion{
+        .signature = (try createFunctionSignature(stc_free_func, allocator)).base.function,
+        .name = name,
+        .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
+    });
+
+    var strct_traits = ArrayList(Traits.Trait).init(allocator);
+    try strct_traits.append(Traits.Trait.Eq);
+    try ctx.trait_map.put(stct.name, strct_traits);
+
+    // Implementing the trait equals (and notEqual) for the struct and void
+    // stct == void -> bool
+    var stct_implems = ArrayList(funcPair).init(allocator);
+    try Traits.createTraitWithBinOperators(
+        &stct_implems,
+        (try Types.CreateTypeVoid(allocator, false)).decided,
+        (try Types.CreateTypeBool(allocator, false)).decided,
+        &[_]ast.binOperator{ .Equal, .NotEqual },
+        allocator,
+    );
+
+    try ctx.type_implem.put(
+        stct.name,
+        stct_implems,
+    );
+}
+
 pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     var funcs_to_compile = ArrayList(functionVersion).init(allocator);
 
@@ -698,19 +751,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
             .StructDef => |stct| {
-                var hab_it = stct.habitants.iterator();
-                while (hab_it.next()) |hab| {
-                    if (!ctx.typeExist(hab.value_ptr.*))
-                        errors.bbcErrorExit("The type '{s}' doesn't exist", .{hab.value_ptr.*.toString(allocator)}, stct.reference);
-                }
-                try ctx.addTypeDef(stct.name, stct);
-                const name = try std.fmt.allocPrint(allocator, "{s}Free", .{stct.name});
-                const stc_free_func = ctx.getFunction(name);
-                try ctx.functions_to_compile.append(functionVersion{
-                    .signature = (try createFunctionSignature(stc_free_func, allocator)).base.function,
-                    .name = name,
-                    .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
-                });
+                try analyseStructDef(stct, ctx, allocator);
             },
             else => {},
         }

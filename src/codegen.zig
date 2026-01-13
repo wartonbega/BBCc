@@ -20,7 +20,10 @@ const Context = struct {
     codeContext: *analyser.Context,
     allocator: std.mem.Allocator,
     builder: Inst.Builder,
+
     registers: Inst.RegisterTable,
+    registerTrace: Inst.RegisterTable, // The trace of the registers used in a function
+
     func_id_table_counter: std.hash_map.StringHashMap(usize),
     func_uid_list: Arraylist(struct { // Allows, to get, with only the version, the uid
         uid: []const u8,
@@ -55,11 +58,18 @@ const Context = struct {
     pub fn generateLabel(self: *Context, base: []const u8) ![]const u8 {
         var count: usize = @intCast(0);
         if (self.labels.contains(base)) {
-            count = self.labels.get(base).?;
+            count = self.labels.get(base).? + 1;
+            try self.labels.put(base, count + 1);
         } else {
             try self.labels.put(base, count);
         }
         return try std.fmt.allocPrint(self.allocator, "autogen@{s}_{d}", .{ base, count });
+    }
+
+    pub fn eraseRegisterTrace(self: *Context) void {
+        for (Inst.RegIter) |reg| {
+            self.registerTrace.setRegister(reg, false);
+        }
     }
 };
 
@@ -71,7 +81,11 @@ const ScopeContext = struct {
 
     pub fn init(alloc: Allocator) !*ScopeContext {
         const self = try alloc.create(ScopeContext);
-        self.* = ScopeContext{ .vars = VarPos.init(alloc), .simstack = Arraylist(Inst.Type).inti(alloc) };
+        self.* = ScopeContext{
+            .vars = VarPos.init(alloc),
+            .simstack = Arraylist(Inst.Type).inti(alloc),
+        };
+
         return self;
     }
 
@@ -164,20 +178,31 @@ pub fn generateArguments(args: Arraylist(*Ast.Arguments), ctx: *Context, scopeCt
     }
 }
 
-pub fn freeArguments(args: Arraylist(*Ast.Arguments), ctx: *Context, scopeCtx: *ScopeContext) !void {
+pub fn freeArguments(args: Arraylist(*Ast.Arguments), ctx: *Context, scopeCtx: *ScopeContext, funcname: []const u8) !void {
     var size: i64 = @intCast(0);
     if (args.items.len == 0) // No need to do anything then
         return;
     for (args.items) |arg| {
         size += getCompileSize(getCompileType(arg._type, scopeCtx.version, scopeCtx, ctx.allocator));
     }
-
+    try ctx.builder.comment("Freeing the arguements");
     for (args.items) |arg| {
         const emplacement = scopeCtx.vars.get(arg.name).?;
-        ctx.builder.decrementReferenceCounter(emplacement);
-        try callFreeFunction(ctx, scopeCtx, emplacement, bbcTypes.Type{ .decided = arg._type });
+        const compile_arg_type = getCompileType(arg._type, scopeCtx.version, scopeCtx, ctx.allocator);
+        const gen_funcname = try std.fmt.allocPrint(ctx.allocator, "{s}Free", .{arg._type.base.name});
+        if (compile_arg_type == .pointer and !std.mem.eql(u8, funcname, gen_funcname)) {
+            const loc = try pickWiselyLocation(ctx, scopeCtx, compile_arg_type, .mid);
+
+            try ctx.builder.readFromPointer(loc, 0, emplacement);
+
+            try ctx.builder.decrementReferenceCounter(loc);
+            try callFreeFunction(ctx, scopeCtx, loc, bbcTypes.Type{ .decided = arg._type });
+            try freeLocation(loc, scopeCtx, ctx);
+        }
+
+        try ctx.builder.decreaseStack(.{ .intType = false }); // Don't care about the real type
     }
-    try ctx.builder.decreaseStack(@intCast(size));
+    try ctx.builder.comment("");
 }
 
 pub fn callFreeFunction(ctx: *Context, scopeCtx: *ScopeContext, loc: Inst.Location, _type: bbcTypes.Type) !void {
@@ -190,32 +215,50 @@ pub fn callFreeFunction(ctx: *Context, scopeCtx: *ScopeContext, loc: Inst.Locati
     };
     try functype.argtypes.append((try bbcTypes.CreateTypeInt(ctx.allocator, false)).decided);
     const label = ctx.getUid(analyser.functionVersion{ .name = funcname, .signature = functype, .version = .init(ctx.allocator) });
+
     const func = Inst.Location{ .label = label };
 
     var arguments = Arraylist(Inst.Location).init(ctx.allocator);
     try arguments.append(.{ .stack = scopeCtx.getCurrentStackIndex() });
+
     try ctx.builder.pushValue(loc);
 
     try ctx.builder.funcall(func, arguments);
-    try ctx.builder.decreaseStack(.{ .pointer = false });
+    try ctx.builder.popValue(loc);
 }
 
-pub fn chooseWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext) Inst.Location {
-    const a = blk: for (Inst.RegIter, ctx.registers.utilised) |reg, utilised| {
-        if (!utilised) {
-            break :blk Inst.Location{ .register = reg };
+pub fn chooseWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext, duration: Inst.DurationPriority) Inst.Location {
+    const a = if (duration == .mid) blk: {
+        for (Inst.CalleeSave) |reg| {
+            const utilised = ctx.registers.getRegister(reg);
+            if (!utilised) {
+                break :blk Inst.Location{ .register = reg };
+            }
+        } else {
+            break :blk Inst.Location{
+                .stack = scopeCtx.getCurrentStackIndex(),
+            };
         }
-    } else {
-        break :blk Inst.Location{
-            .stack = scopeCtx.getCurrentStackIndex(),
-        };
+    } else if (duration == .scratch) blk: {
+        for (Inst.ScratchReg) |reg| {
+            const utilised = ctx.registers.getRegister(reg);
+            if (!utilised) {
+                break :blk Inst.Location{ .register = reg };
+            }
+        } else {
+            break :blk Inst.Location{
+                .stack = scopeCtx.getCurrentStackIndex(),
+            };
+        }
+    } else Inst.Location{
+        .stack = scopeCtx.getCurrentStackIndex(),
     };
     return a;
 }
 
-pub fn pickWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext, t: Inst.Type) !Inst.Location {
+pub fn pickWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext, t: Inst.Type, duration: Inst.DurationPriority) !Inst.Location {
     // Allocates memory on the stack if necessary, and returns the location
-    const loc = chooseWiselyLocation(ctx, scopeCtx);
+    const loc = chooseWiselyLocation(ctx, scopeCtx, duration);
     switch (loc) {
         .stack => {
             // we add a pointer on the stack
@@ -224,10 +267,13 @@ pub fn pickWiselyLocation(ctx: *Context, scopeCtx: *ScopeContext, t: Inst.Type) 
         },
         .register => |reg| {
             ctx.registers.setRegister(reg, true);
+            // We need to trace what registers have been used in the function
+            // so they can be saved (caller saved - like)
+            ctx.registerTrace.setRegister(reg, true);
         },
         .argument => unreachable, // Can't pick an argument
         .label => unreachable,
-        .void => {},
+        .void => unreachable,
     }
     return loc;
 }
@@ -243,12 +289,22 @@ pub fn freeLocation(loc: Inst.Location, scopeCtx: *ScopeContext, ctx: *Context) 
     }
 }
 
-pub fn generateValueAssignement(value: *const Ast.Value, scopeCtx: *ScopeContext) Inst.Location {
-    return switch (value.*) {
-        .identifier => |ident| return scopeCtx.getVariable(ident.name),
-        .varDec => |vardec| return scopeCtx.getVariable(vardec.name),
-        else => Inst.Location{ .void = {} },
-    };
+pub fn generateValueAssignement(value: *const Ast.Value, ctx: *Context, scopeCtx: *ScopeContext) !Inst.Location {
+    switch (value.*) {
+        .identifier => |ident| {
+            const varpos = scopeCtx.getVariable(ident.name);
+            const ret = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false }, .mid);
+            try ctx.builder.loadAddress(varpos, ret);
+            return ret;
+        },
+        .varDec => |vardec| {
+            const varpos = scopeCtx.getVariable(vardec.name);
+            const ret = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false }, .mid);
+            try ctx.builder.loadAddress(varpos, ret);
+            return ret;
+        },
+        else => return Inst.Location{ .void = {} },
+    }
 }
 
 pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeContext, ctx: *Context) !Inst.Location {
@@ -287,12 +343,22 @@ pub fn generateBinOperation(binop: *const Ast.binaryOperation, scopeCtx: *ScopeC
         }
         return res_loc;
     }
+    if (rhs_type == .voidType) {
+        try freeLocation(rhs_loc, scopeCtx, ctx);
+        const res_loc = lhs_loc; // the result is stored in the lhs location
+        switch (binop.operator) {
+            .Equal => try ctx.builder.equal(lhs_loc, rhs_loc),
+            .NotEqual => try ctx.builder.notEqual(lhs_loc, rhs_loc),
+            else => unreachable,
+        }
+        return res_loc;
+    }
     errors.bbcErrorExit("Can't compile operator {s} with types {s} and {s}", .{
         Ast.reprBinOp(binop.operator),
         @tagName(lhs_type),
         @tagName(rhs_type),
     }, "");
-    return chooseWiselyLocation(ctx, scopeCtx);
+    return Inst.Location{ .void = {} };
 }
 
 pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Context) Allocator.Error!Inst.Location {
@@ -307,13 +373,18 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
     }
     switch (value.*) {
         .intLit => |intlit| {
-            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
+            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false }, .mid);
             try ctx.builder.intLit(@intCast(intlit.value), dest);
             return dest;
         },
         .boolLit => |boollit| {
-            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false });
+            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false }, .mid);
             try ctx.builder.charLit(if (boollit.value) 1 else 0, dest);
+            return dest;
+        },
+        .nullLit => {
+            const dest = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false }, .mid);
+            try ctx.builder.intLit(0, dest);
             return dest;
         },
         .identifier => |ident| {
@@ -323,7 +394,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
             if (_type.base == .function)
                 return origin;
             const compile_type = getCompileType(_type, scopeCtx.version, scopeCtx, ctx.allocator);
-            const dest = try pickWiselyLocation(ctx, scopeCtx, compile_type);
+            const dest = try pickWiselyLocation(ctx, scopeCtx, compile_type, .mid);
 
             try ctx.builder.moveInst(origin, dest, compile_type);
 
@@ -332,7 +403,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
         .assignement => |assign| {
             // "dest = origin"
             const origin = try generateValue(assign.rhs, scopeCtx, ctx);
-            const dest = generateValueAssignement(assign.lhs, scopeCtx);
+            const dest = try generateValueAssignement(assign.lhs, ctx, scopeCtx);
             const _type = (try bbcTypes.getTypeOfValue(assign.rhs, scopeCtx.context, ctx.allocator)).decided;
             const compile_type = getCompileType(
                 _type,
@@ -341,16 +412,22 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 ctx.allocator,
             );
             if (compile_type == .pointer) {
-                try ctx.builder.decrementReferenceCounter(dest);
-                const emplacement = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false });
+                try ctx.builder.incrementeReferenceCounter(origin);
+
+                try ctx.builder.comment("Decrementing ref counter and free");
+                const emplacement = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false }, .mid);
                 try ctx.builder.readFromPointer(emplacement, 0, dest);
+                try ctx.builder.decrementReferenceCounter(emplacement);
+
                 try callFreeFunction(ctx, scopeCtx, emplacement, bbcTypes.Type{ .decided = _type });
                 try freeLocation(emplacement, scopeCtx, ctx);
-
-                try ctx.builder.incrementeReferenceCounter(origin);
+                try ctx.builder.comment(" -- ");
             }
-            try ctx.builder.moveInst(origin, dest, compile_type);
+            try ctx.builder.comment("Writing variable");
+            try ctx.builder.writeToPointer(dest, 0, origin);
+            try ctx.builder.comment("--");
             try freeLocation(origin, scopeCtx, ctx);
+            try freeLocation(dest, scopeCtx, ctx);
             return Inst.Location{ .void = {} };
         },
         .varDec => {
@@ -390,8 +467,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 const stack_lock = Inst.Location{
                     .stack = scopeCtx.getCurrentStackIndex(),
                 };
-                try ctx.builder.reserveStack(@intCast(8));
-                try ctx.builder.moveInst(base_arg, stack_lock, arg_compile_type);
+                try ctx.builder.pushValue(base_arg);
                 try freeLocation(base_arg, scopeCtx, ctx);
                 try args.append(stack_lock);
             }
@@ -405,8 +481,8 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 scopeCtx,
                 ctx.allocator,
             );
-            const retloc = try pickWiselyLocation(ctx, scopeCtx, ret_compile_type);
-            try ctx.builder.moveInst(.{ .register = Inst.Registers.r0 }, retloc, ret_compile_type);
+            const retloc = try pickWiselyLocation(ctx, scopeCtx, ret_compile_type, .mid);
+            try ctx.builder.moveInst(.{ .register = .r0 }, retloc, ret_compile_type);
 
             for (0..funcall.args.items.len) |i_arg| {
                 const arg_compile_type = getCompileType(
@@ -438,7 +514,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 .content = stringlit.value,
                 .name = string_name,
             });
-            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .pointer = false });
+            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .pointer = false }, .mid);
             try ctx.builder.moveInst(.{ .label = string_name }, ret_loc, Inst.Type{ .pointer = false });
             try ctx.builder.print(ret_loc);
             return ret_loc;
@@ -451,7 +527,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 scopeCtx,
                 ctx.allocator,
             );
-            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, compile_type);
+            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, compile_type, .mid);
 
             // We can generate each scope one by one
             for (ifstmt.conditions.items, ifstmt.scopes.items) |cond, scope| {
@@ -505,7 +581,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
                 scopeCtx,
                 ctx.allocator,
             );
-            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, comp_type);
+            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, comp_type, .mid);
 
             try ctx.builder.funcall(Inst.Location{ .label = pseudo_func }, .init(ctx.allocator));
 
@@ -547,7 +623,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
         },
         .structInit => |stc_init| {
             // See standards to understand how the memory is layed out
-            const stc_loc = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false });
+            const stc_loc = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false }, .mid);
             const stc_type = Ast.Type{
                 .base = .{ .name = stc_init.name },
                 .err = false,
@@ -576,29 +652,34 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
 
                 try ctx.builder.writeToPointer(stc_loc, idx, content_loc);
 
-                const emplacement = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false });
+                const emplacement = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false }, .mid);
                 try ctx.builder.readFromPointer(emplacement, idx, stc_loc);
                 if (hab_compile_type == .pointer) {
+                    try ctx.builder.incrementeReferenceCounter(content_loc);
                     try ctx.builder.decrementReferenceCounter(emplacement);
                     try callFreeFunction(ctx, scopeCtx, emplacement, bbcTypes.Type{ .decided = hab_type });
-                    try ctx.builder.incrementeReferenceCounter(content_loc);
                 }
                 try freeLocation(emplacement, scopeCtx, ctx);
                 try freeLocation(content_loc, scopeCtx, ctx);
             }
+            const zero_count = try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .intType = false }, .scratch);
+            try ctx.builder.intLit(0, zero_count);
+            try ctx.builder.writeToPointer(stc_loc, 0, zero_count); // Coounter and size are 0 initialized
+            try ctx.builder.writeToPointer(stc_loc, 1, zero_count);
+            try freeLocation(zero_count, scopeCtx, ctx);
 
             return stc_loc;
         },
         .unaryOperatorRight => |uop_right| {
             const value_loc = try generateValue(uop_right.expr, scopeCtx, ctx);
             const value_type = try bbcTypes.getTypeOfValue(uop_right.expr, scopeCtx.context, ctx.allocator);
-            const ret_type = try analyser.analyseValue(@constCast(value), scopeCtx.context, ctx.allocator);
+            const ret_type = try bbcTypes.getTypeOfValue(@constCast(value), scopeCtx.context, ctx.allocator);
             const compile_type = getCompileType(ret_type.decided, scopeCtx.version, scopeCtx, ctx.allocator);
             const idx = scopeCtx.context.getStructHabitantIndex(
                 value_type.decided.base.name,
                 uop_right.operator.pointAttr,
             );
-            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, compile_type);
+            const ret_loc = try pickWiselyLocation(ctx, scopeCtx, compile_type, .mid);
             try ctx.builder.readFromPointer(ret_loc, idx, value_loc);
             try freeLocation(value_loc, scopeCtx, ctx);
             return ret_loc;
@@ -617,7 +698,7 @@ pub fn generateValue(value: *const Ast.Value, scopeCtx: *ScopeContext, ctx: *Con
 
 pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Context) !Inst.Location {
     if (scope.code.items.len == 0)
-        return pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .voidType = false });
+        return try pickWiselyLocation(ctx, scopeCtx, Inst.Type{ .voidType = false }, .scratch);
     // declaring all the variables inside the scope
     var newScopeCtx = try ctx.allocator.create(ScopeContext);
     newScopeCtx.vars = try VarPos.clone(scopeCtx.vars);
@@ -633,6 +714,7 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
     // we can know at all time where they are
     var it = scope.ctx.variables.iterator();
     var allocsize: i64 = @intCast(0);
+    var variables = Arraylist(bbcTypes.Type).init(ctx.allocator);
     while (it.next()) |variable| {
         const vartype = getCompileType(variable.value_ptr.*.decided, scopeCtx.version, scopeCtx, ctx.allocator);
         allocsize += getCompileSize(vartype);
@@ -640,6 +722,7 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
         try newScopeCtx.vars.put(variable.key_ptr.*, Inst.Location{
             .stack = scopeCtx.getCurrentStackIndex(),
         });
+        try variables.append(variable.value_ptr.*);
     }
     // allocating the variables declared in the scope
 
@@ -656,7 +739,19 @@ pub fn generateScope(scope: *const Ast.Scope, scopeCtx: *ScopeContext, ctx: *Con
     try ctx.builder.comment("Return value of scope");
     const ret = try generateValue(scope.code.getLast(), newScopeCtx, ctx);
     while (newScopeCtx.simstack.items.len - init_stack_size > 0) {
-        try ctx.builder.decreaseStack(newScopeCtx.simstack.pop().?);
+        const ast_type = variables.pop().?;
+        const _type = newScopeCtx.simstack.pop().?;
+        if (_type == .pointer) {
+            const loc = try pickWiselyLocation(ctx, scopeCtx, .{ .pointer = false }, .mid);
+            try ctx.builder.popValue(loc);
+
+            try ctx.builder.decrementReferenceCounter(loc);
+            try callFreeFunction(ctx, scopeCtx, loc, ast_type);
+
+            try freeLocation(loc, scopeCtx, ctx);
+        } else {
+            try ctx.builder.decreaseStack(newScopeCtx.simstack.pop().?);
+        }
     }
     return ret;
 }
@@ -676,17 +771,55 @@ pub fn generateFunction(func: *const analyser.functionVersion, function_uid: []c
     scopeCtx.version = try func.version.clone();
     defer scopeCtx.simstack.deinit();
 
+    // We can get the position of the builder before and after the scope build
+    // to shift the stack because we're saving the registers used in the function
+    // on the stack
+    const begin_func_pos = ctx.builder.getPosition();
+
     // generating the arguements and putting them on the stack
     try generateArguments(funcdef.arguments, ctx, scopeCtx);
 
     const return_val = try generateScope(funcdef.code, scopeCtx, ctx);
+    if (getCompileType((try bbcTypes.getTypeOfScope(funcdef.code, scopeCtx.context, ctx.allocator)).decided, func.version, scopeCtx, ctx.allocator) != .voidType)
+        try ctx.builder.moveInst(return_val, .{ .register = .r0 }, .{ .intType = false });
+    try freeLocation(return_val, scopeCtx, ctx);
+
+    // All the registers used
+    var reg_pushed = Arraylist(Inst.Registers).init(ctx.allocator);
+    defer reg_pushed.deinit();
+    ctx.builder.setPosition(begin_func_pos); // Setting the builder to a previous position before the scope
+    try ctx.builder.comment("Saving the callee saved registers");
+    for (ctx.registerTrace.utilised, 0..) |utilised, i| {
+        const reg = Inst.RegIter[i];
+        if (utilised and Inst.in(reg, &Inst.CalleeSave)) {
+            try reg_pushed.insert(0, reg);
+            try ctx.builder.pushValue(.{ .register = reg });
+        }
+    }
+    try ctx.builder.comment("");
+
+    const second_func_pos = ctx.builder.getPosition();
+
+    ctx.builder.setPosition(.{ .last = {} }); // Now we can set it to the end of the code
+
+    // clearing the arguments on the stack
+    try freeArguments(funcdef.arguments, ctx, scopeCtx, func.name);
+
+    // We can shift the stack in the scope
+    ctx.builder.shiftStackBetween(second_func_pos, .{ .last = {} }, @intCast(reg_pushed.items.len + 1));
+    // Now we can restore the registers
+    try ctx.builder.comment("Loading the callee saved registers");
+    for (reg_pushed.items) |reg| {
+        try ctx.builder.popValue(.{ .register = reg });
+    }
+    try ctx.builder.comment("");
 
     // We can declare the function's ending , seting rbp, and all
     try ctx.builder.endFunction();
-
-    try ctx.builder.returnInst(return_val);
+    try ctx.builder.returnInst(.{ .register = .r0 });
 
     try freeLocation(return_val, scopeCtx, ctx);
+    ctx.eraseRegisterTrace();
 }
 
 pub fn generateFuncUID(funcname: []const u8, f_table: *std.hash_map.StringHashMap(usize), alloc: Allocator) ![]const u8 {
@@ -715,6 +848,7 @@ pub fn generateProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: Alloca
         .func_uid_list = .init(alloc),
         .labels = .init(alloc),
         .dec_strings = .init(alloc),
+        .registerTrace = .init(),
     };
 
     var functions_uid = Arraylist([]const u8).init(alloc);
