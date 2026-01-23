@@ -172,7 +172,7 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
                         .name => |name| errors.bbcErrorExit("Can't call a non-function value of type {s}", .{name}, func.func.getReference()),
                         .function => |functype| {
                             if (func.args.items.len != functype.argtypes.items.len)
-                                errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ func.args.items.len, functype.argtypes.items.len }, func.func.getReference());
+                                errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ functype.argtypes.items.len, func.args.items.len }, func.func.getReference());
                             // We can build the current function version, which shall have to be compiled later
                             var func_version = try getFuncallVersion(func, functype, ctx, allocator);
                             const ret_type = t.base.function.retype.base;
@@ -265,6 +265,24 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) st
                     has_error = true;
             }
             return CreateTypeVoid(allocator, has_error);
+        },
+        .function => |func| {
+            const ret_type = try allocator.create(ast.Type);
+            var functype = ast.TypeFunc{
+                .argtypes = .init(allocator),
+                .retype = func.return_type,
+                .typeparam = .init(allocator),
+                .fname = func.name,
+            };
+            for (func.arguments.items) |arg| {
+                try functype.argtypes.append(arg._type);
+            }
+            ret_type.* = ast.Type{
+                .base = .{ .function = functype },
+                .err = false,
+                .references = 0,
+            };
+            return Type{ .decided = ret_type };
         },
         else => {
             std.debug.print("Unimplemented {}", .{value.*});
@@ -514,6 +532,23 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 switch (assign.lhs.*) {
                     .identifier => |ident| ctx.getVariable(ident.name),
                     .varDec => |vardec| ctx.getVariable(vardec.name),
+                    .unaryOperatorRight => |uop_right| blk: {
+                        if (uop_right.operator == .pointAttr) {
+                            const left_value = try getTypeOfValue(uop_right.expr, ctx, allocator);
+                            if (left_value == .undecided)
+                                return;
+                            if (!ctx.typeDefExist(left_value.decided.base.name)) {
+                                errors.bbcErrorExit("Unknown struct type name '{s}'", .{left_value.toString(allocator)}, uop_right.reference);
+                            }
+                            const hab_name = uop_right.operator.pointAttr;
+                            const typedef = ctx.getTypeDef(left_value.decided.base.name);
+                            if (!typedef.habitantExist(uop_right.operator.pointAttr))
+                                errors.bbcErrorExit("No habitant with name '{s}' in the structure '{s}'", .{ hab_name, typedef.name }, uop_right.reference);
+                            break :blk Type{ .decided = typedef.getHabitant(uop_right.operator.pointAttr) };
+                        } else {
+                            unreachable;
+                        }
+                    },
                     else => unreachable,
                 };
             switch (rhsType) {
@@ -606,7 +641,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
             if (!ctx.typeDefExist(name))
                 errors.bbcErrorExit("Type name '{s}' don't exist", .{name}, stc_init.reference);
             const orgn = ctx.getTypeDef(name);
-            if (stc_init.habitants.count() != orgn.habitants.count() - 2)
+            if (stc_init.habitants.count() != orgn.habitants.count() - 2 - orgn.methods.count())
                 errors.bbcErrorExit(
                     "Not the right number of habitants in the struct initialisation, expected {d} got {d}",
                     .{ stc_init.habitants.count(), orgn.habitants.count() },
@@ -634,6 +669,7 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         },
         .freeKeyword => |_| {},
         .Print => {},
+        .function => {}, // do nothing because everything is done in the first pass of the anlysis
         else => {
             std.debug.print("Unimplemented {}\n", .{value});
             unreachable;

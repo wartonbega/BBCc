@@ -1,0 +1,27 @@
+{
+  "name": "bbc-language",
+  "displayName": "BBC Language",
+  "description": "Syntax highlighting for the BBC programming language",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "bbc",
+        "aliases": ["BBC", "bbc"],
+        "extensions": [".bbc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bbc",
+        "scopeName": "source.bbc",
+        "path": "./syntaxes/bbc.tmLanguage.json"
+      }
+    ]
+  }
+}

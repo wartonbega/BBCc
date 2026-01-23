@@ -1,0 +1,26 @@
+struct Toto {
+    Int a,
+    Int b,
+
+    func test2(Int x) Int {
+        if x == 0 0
+        else 1
+    }
+
+    func _println() Toto {
+        println("Toto object")
+        self
+    }
+
+    func dup() Toto {
+        @Toto {
+            a = a,
+            b = b
+        }
+    }
+}
+
+func main () Int {
+    let a = @Toto{a = 1, b = 2}.dup()._println()
+    0
+}

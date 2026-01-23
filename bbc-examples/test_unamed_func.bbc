@@ -1,0 +1,13 @@
+
+
+
+func main () Int {
+    println(__name)
+    let a = func (Int x, Int y) Int -> {
+        println(__name)
+        x * y
+    }
+    let b = a(1, 0)
+    println(b)
+    0
+}

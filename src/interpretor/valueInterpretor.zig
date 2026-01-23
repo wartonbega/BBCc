@@ -18,6 +18,10 @@ fn setVariableRhsAssign(lhs: *Ast.Value, ctx: *Context, value: Value) !void {
         .varDec => |vardec| {
             try ctx.setVariable(vardec.name, value);
         },
+        .unaryOperatorRight => |uopright| {
+            const operand = try interpreteValue(uopright.expr, ctx);
+            operand.Object.setHabitant(uopright.operator.pointAttr, value, ctx.heap);
+        },
         else => {
             std.debug.print("uniplemented {}", .{lhs.*});
             unreachable;
@@ -28,6 +32,8 @@ fn setVariableRhsAssign(lhs: *Ast.Value, ctx: *Context, value: Value) !void {
 pub fn interpreteBinOp(binop: *Ast.binaryOperation, ctx: *Context) !Values.Value {
     const lhs_value = try interpreteValue(binop.lhs, ctx);
     const rhs_value = try interpreteValue(binop.rhs, ctx);
+    defer lhs_value.checkReference(ctx.heap);
+    defer rhs_value.checkReference(ctx.heap);
     switch (binop.operator) {
         .Plus => {
             return Values.Plus(lhs_value, rhs_value, ctx, binop.reference);
@@ -79,6 +85,15 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         .intLit => |i| return Value{ .Int = i.value },
         .boolLit => |b| return Value{ .Bool = b.value },
         .charLit => |c| return Value{ .Char = c.value },
+        .stringLit => |s| {
+            var s_list = std.ArrayList(u8).init(ctx.heap);
+            for (s.value) |c| {
+                s_list.append(c) catch {};
+            }
+            const s_obj = try ctx.heap.create(Values.StringObj);
+            s_obj.* = .{ .content = s_list, .references = 0 };
+            return Value{ .String = s_obj };
+        },
         .nullLit => return Value{ .Null = {} },
         .errorCheck => |err_c| {
             const ret = try interpreteValue(err_c.value, ctx);
@@ -88,9 +103,13 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         },
         .scope => |scope| {
             var child_ctx = ctx.createChild();
+            defer child_ctx.deinit();
             return try Itpr.interpreteScope(scope, &child_ctx);
         },
-        .varDec => {},
+        .varDec => |variable| {
+            const name = variable.name;
+            try ctx.setVariable(name, .{ .Null = {} });
+        },
         .assignement => |assign| {
             const right_value = try interpreteValue(assign.rhs, ctx);
             try setVariableRhsAssign(assign.lhs, ctx, right_value);
@@ -99,14 +118,17 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         .binaryOperator => |binop| return interpreteBinOp(binop, ctx),
         .funcall => |funcall| {
             const function = try interpreteValue(funcall.func, ctx);
+            defer function.decrementReference(ctx.heap);
             if (function != .Function)
                 return Itpr.ContextualError.UnknownFunction;
-            var arguments = std.ArrayList(Values.Value).init(ctx.GPAlloc);
+            var arguments = std.ArrayList(Values.Value).init(ctx.heap);
             defer arguments.deinit();
             for (funcall.args.items) |arg| {
                 try arguments.append(try interpreteValue(arg, ctx));
             }
-            return try Itpr.interpreteFunction(function.Function, arguments, ctx);
+            if (function.Function.parentObj) |pobj| {
+                return try Itpr.interpreteFunction(function.Function.func, arguments, pobj, ctx);
+            } else return try Itpr.interpreteFunction(function.Function.func, arguments, null, ctx);
         },
         .If => |ifstmt| {
             for (ifstmt.conditions.items, ifstmt.scopes.items) |condition, scope| {
@@ -121,13 +143,62 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         .parenthesis => |par| return interpreteValue(par, ctx),
         .Print => |p| {
             if (p.ln) {
-                for (p.args.items) |arg|
-                    Print.print(try interpreteValue(arg, ctx));
+                for (p.args.items) |arg| {
+                    const val = try interpreteValue(arg, ctx);
+                    Print.print(val);
+                    val.checkReference(ctx.heap);
+                }
                 std.debug.print("\n", .{});
             } else {
-                for (p.args.items) |arg|
-                    Print.print(try interpreteValue(arg, ctx));
+                for (p.args.items) |arg| {
+                    const val = try interpreteValue(arg, ctx);
+                    Print.print(val);
+                    val.checkReference(ctx.heap);
+                }
             }
+        },
+        .unaryOperatorRight => |uop| {
+            const operand = try interpreteValue(uop.expr, ctx);
+            defer operand.checkReference(ctx.heap);
+            return operand.getHabitant(uop.operator.pointAttr);
+        },
+        .While => |_while| {
+            while ((try interpreteValue(_while.condition, ctx)).Bool) {
+                const ret = try interpreteValue(_while.exec, ctx); // Should be null
+                if (ret != .Null) {
+                    return ret;
+                }
+            }
+        },
+        .structInit => |stc_init| {
+            var obj_ret = try ctx.heap.create(Values.Object);
+            obj_ret.* = .{
+                .habitants = .init(ctx.heap),
+                .name = stc_init.name,
+                .references = 0,
+            };
+            var field_it = stc_init.habitants.iterator();
+            while (field_it.next()) |hab| {
+                const habitant = try interpreteValue(hab.value_ptr.*, ctx);
+                obj_ret.setHabitant(hab.key_ptr.*, habitant, ctx.heap);
+            }
+            var meth_it = ctx.codeContext.getTypeDef(stc_init.name).methods.iterator();
+            while (meth_it.next()) |meth| {
+                obj_ret.setHabitant(
+                    meth.key_ptr.*,
+                    Values.Value{
+                        .Function = .{
+                            .func = meth.value_ptr.*,
+                            .parentObj = null,
+                        },
+                    },
+                    ctx.heap,
+                );
+            }
+            return Values.Value{ .Object = obj_ret };
+        },
+        .function => |func| {
+            return Value{ .Function = .{ .func = func, .parentObj = null } };
         },
         else => {
             std.debug.print("uniplemented {}", .{value.*});

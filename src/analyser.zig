@@ -128,7 +128,7 @@ pub const Context = struct {
 
     pub fn typeDefExist(self: *Context, name: []const u8) bool {
         // Same as typeContainsHabitants, but for another usage
-        return self.typedef.contains(name);
+        return self.typedef.contains(name) or std.mem.eql(u8, "String", name);
     }
 
     pub fn addTypeDef(self: *Context, name: []const u8, stct: *ast.structDef) !void {
@@ -140,8 +140,8 @@ pub const Context = struct {
     }
 
     pub fn getStructHabitantIndex(self: *Context, name: []const u8, habitant: []const u8) i64 {
-        const order = self.typedef.get(name).?.order;
-        for (order.items, 0..) |hab, i| {
+        const fields = self.typedef.get(name).?.fields;
+        for (fields.items, 0..) |hab, i| {
             if (std.mem.eql(u8, hab, habitant))
                 return @intCast(i);
         }
@@ -157,6 +157,9 @@ pub const Context = struct {
     pub fn getFunction(self: *Context, name: []const u8) *ast.funcDef {
         if (self.parent) |parent| // The root of the context tree
             return parent.getFunction(name);
+        if (!self.functions.contains(name))
+            std.debug.print("## /!\\ {s}\n", .{name});
+
         return self.functions.get(name).?;
     }
 
@@ -217,6 +220,22 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                 errors.bbcErrorExit("The variable {s} has already been declared before", .{vardec.name}, vardec.reference);
             const lhs_type = try Types.duplicateWithErrorUnion(allocator, rightType.decided, false);
             try ctx.createVariable(vardec.name, lhs_type);
+        },
+        .unaryOperatorRight => |uop_right| {
+            if (uop_right.operator == .pointAttr) {
+                const left_value = try analyseValue(uop_right.expr, ctx, allocator);
+                if (left_value == .undecided)
+                    return;
+                if (!ctx.typeDefExist(left_value.decided.base.name)) {
+                    errors.bbcErrorExit("Unknown struct type name '{s}'", .{left_value.toString(allocator)}, uop_right.reference);
+                }
+                const hab_name = uop_right.operator.pointAttr;
+                const typedef = ctx.getTypeDef(left_value.decided.base.name);
+                if (!typedef.habitantExist(uop_right.operator.pointAttr))
+                    errors.bbcErrorExit("No habitant with name '{s}' in the structure '{s}'", .{ hab_name, typedef.name }, uop_right.reference);
+            } else {
+                unreachable;
+            }
         },
         .identifier => |ident| {
             if (!ctx.variableExist(ident.name))
@@ -286,7 +305,7 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
                 .name => |name| errors.bbcErrorExit("Can't call a non-function value of type {s}", .{name}, func.func.getReference()),
                 .function => |functype| {
                     if (func.args.items.len != functype.argtypes.items.len)
-                        errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ func.args.items.len, functype.argtypes.items.len }, func.func.getReference());
+                        errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ functype.argtypes.items.len, func.args.items.len }, func.func.getReference());
                     // We can build the current function version, which shall have to be compiled later
                     var func_version = std.hash_map.StringHashMap(Types.Type).init(allocator);
                     for (func.args.items, functype.argtypes.items) |a, b| {
@@ -356,8 +375,9 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
                 const arg_type = func.signature.argtypes.items[0];
                 switch (rhsType) {
                     .decided => {
-                        if (rhsType.match(arg_type))
+                        if (rhsType.match(arg_type)) {
                             return Types.Type{ .decided = func.signature.retype };
+                        }
                     },
                     .undecided => |traits| {
                         if (Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, Types.Type{ .decided = arg_type }, traits))
@@ -512,7 +532,7 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             if (!ctx.typeDefExist(name))
                 errors.bbcErrorExit("Type name '{s}' don't exist", .{name}, stc_init.reference);
             const orgn = ctx.getTypeDef(name);
-            if (stc_init.habitants.count() != orgn.habitants.count() - 2)
+            if (stc_init.habitants.count() != orgn.habitants.count() - 2 - orgn.methods.count())
                 errors.bbcErrorExit(
                     "Not the right number of habitants in the struct initialisation, expected {d} got {d}",
                     .{ stc_init.habitants.count(), orgn.habitants.count() },
@@ -571,6 +591,26 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             }
             return Types.CreateTypeVoid(allocator, has_error);
         },
+        .function => |func| {
+            //try analyseFunction(func, ctx, allocator);
+            try ctx.setFunction(try func.getName(allocator), func);
+            const ret_type = try allocator.create(ast.Type);
+            var functype = ast.TypeFunc{
+                .argtypes = .init(allocator),
+                .retype = func.return_type,
+                .typeparam = .init(allocator),
+                .fname = func.name,
+            };
+            for (func.arguments.items) |arg| {
+                try functype.argtypes.append(arg._type);
+            }
+            ret_type.* = ast.Type{
+                .base = .{ .function = functype },
+                .err = false,
+                .references = 0,
+            };
+            return Types.Type{ .decided = ret_type };
+        },
         else => {
             std.debug.print("{?}", .{value.*});
             unreachable;
@@ -608,7 +648,7 @@ pub fn createFunctionSignature(func: *ast.funcDef, allocator: Allocator) !*ast.T
             .argtypes = argtypes,
             .retype = func.return_type,
             .typeparam = func.typeparam,
-            .fname = func.name,
+            .fname = try func.getName(allocator),
         } },
         .err = false,
         .references = @intCast(0),
@@ -626,8 +666,20 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
     // We can create a child context for the function
     var ctx = try par_ctx.createChild(allocator);
 
+    // We can set the argument type
     for (func.typeparam.items) |type_param| {
         try ctx.typealiases.put(type_param.name, Traits.traitsFromStrings(type_param.traits, allocator));
+    }
+
+    // and add the inbuild info-functions
+    try ctx.setVariable("__name", try Types.CreateTypeString(allocator, false));
+
+    if (func.parent) |parent| {
+        const typedef = ctx.getTypeDef(parent.base.name);
+        for (typedef.fields.items) |field_name| {
+            try ctx.setVariable(field_name, .{ .decided = typedef.habitants.get(field_name).? });
+        }
+        try ctx.setVariable("self", Types.Type{ .decided = parent });
     }
 
     if (!ctx.typeExist(func.return_type))
@@ -644,7 +696,7 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
     //        try ctx.typealiases.put(type_param.name, Traits.traitsFromStrings(type_param.traits, allocator));
     //    }
 
-    std.debug.print("\n#[Analysing {s}]\n", .{func.name});
+    std.debug.print("\n#[Analysing {s}]\n", .{try func.getName(allocator)});
     _ = try analyseScope(func.code, ctx, allocator);
     try Types.inferTypeScope(func.code, ctx, allocator, Types.Type.init(func.return_type));
     var it = func.code.ctx.variables.iterator();
@@ -704,13 +756,6 @@ pub fn analyseStructDef(stct: *ast.structDef, ctx: *Context, allocator: Allocato
             errors.bbcErrorExit("The type '{s}' doesn't exist", .{hab.value_ptr.*.toString(allocator)}, stct.reference);
     }
     try ctx.addTypeDef(stct.name, stct);
-    const name = try std.fmt.allocPrint(allocator, "{s}Free", .{stct.name});
-    const stc_free_func = ctx.getFunction(name);
-    try ctx.functions_to_compile.append(functionVersion{
-        .signature = (try createFunctionSignature(stc_free_func, allocator)).base.function,
-        .name = name,
-        .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
-    });
 
     var strct_traits = ArrayList(Traits.Trait).init(allocator);
     try strct_traits.append(Traits.Trait.Eq);
@@ -731,10 +776,35 @@ pub fn analyseStructDef(stct: *ast.structDef, ctx: *Context, allocator: Allocato
         stct.name,
         stct_implems,
     );
+
+    var meth_it = stct.methods.iterator();
+
+    while (meth_it.next()) |meth| {
+        const f_signature = stct.habitants.get(meth.key_ptr.*).?;
+        const meth_name = try std.mem.concat(allocator, u8, &[_][]const u8{
+            stct.name,
+            ".",
+            meth.key_ptr.*,
+        });
+        try ctx.addFunctionToCompile(functionVersion{
+            .name = meth_name,
+            .signature = f_signature.base.function,
+            .version = .init(allocator),
+        });
+        try ctx.setFunction(meth_name, meth.value_ptr.*);
+    }
 }
 
 pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     var funcs_to_compile = ArrayList(functionVersion).init(allocator);
+
+    const string_type_def = try allocator.create(ast.structDef);
+    string_type_def.* = .{ .habitants = .init(allocator), .name = "String", .fields = .init(allocator), .reference = "inbuild", .methods = .init(allocator) };
+    try string_type_def.habitants.put("_count", (try Types.CreateTypeInt(allocator, false)).decided);
+    try string_type_def.habitants.put("_size", (try Types.CreateTypeInt(allocator, false)).decided);
+    try string_type_def.fields.append("_count");
+    try string_type_def.fields.append("_size");
+    try ctx.addTypeDef("String", string_type_def);
 
     try Traits.initBasicTraits(ctx, allocator);
     // First pass : search all the function definition

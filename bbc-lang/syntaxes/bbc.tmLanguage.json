@@ -1,0 +1,299 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "BBC",
+  "scopeName": "source.bbc",
+  "fileTypes": ["bbc"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#numbers" },
+    { "include": "#function-definition" },
+    { "include": "#struct-definition" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#builtins" },
+    { "include": "#operators" },
+    { "include": "#struct-init" },
+    { "include": "#type-annotation" },
+    { "include": "#function-call" },
+    { "include": "#identifiers" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.double-slash.bbc",
+      "match": "//.*$"
+    },
+
+    "strings": {
+      "name": "string.quoted.double.bbc",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.bbc",
+          "match": "\\\\."
+        }
+      ]
+    },
+
+    "characters": {
+      "name": "string.quoted.single.bbc",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.bbc",
+          "match": "\\\\."
+        }
+      ]
+    },
+
+    "numbers": {
+      "name": "constant.numeric.integer.bbc",
+      "match": "\\b[0-9]+\\b"
+    },
+
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.true.bbc",
+          "match": "\\btrue\\b"
+        },
+        {
+          "name": "constant.language.boolean.false.bbc",
+          "match": "\\bfalse\\b"
+        },
+        {
+          "name": "constant.language.null.bbc",
+          "match": "\\bnull\\b"
+        }
+      ]
+    },
+
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.conditional.bbc",
+          "match": "\\b(if|elif|else)\\b"
+        },
+        {
+          "name": "keyword.control.loop.bbc",
+          "match": "\\b(while|for)\\b"
+        },
+        {
+          "name": "keyword.declaration.variable.bbc",
+          "match": "\\blet\\b"
+        },
+        {
+          "name": "keyword.operator.memory.bbc",
+          "match": "\\bfree\\b"
+        },
+        {
+          "name": "storage.type.function.bbc",
+          "match": "\\bfunc\\b"
+        },
+        {
+          "name": "storage.type.struct.bbc",
+          "match": "\\bstruct\\b"
+        },
+        {
+          "name": "storage.type.enum.bbc",
+          "match": "\\benum\\b"
+        }
+      ]
+    },
+
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.bbc",
+          "match": "\\b(print|println)\\b"
+        }
+      ]
+    },
+
+    "function-definition": {
+      "patterns": [
+        {
+          "comment": "Named function definition with type parameters",
+          "begin": "\\b(func)\\s*(<)",
+          "beginCaptures": {
+            "1": { "name": "storage.type.function.bbc" },
+            "2": { "name": "punctuation.definition.typeparameters.begin.bbc" }
+          },
+          "end": "(>)\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.typeparameters.end.bbc" },
+            "2": { "name": "entity.name.function.bbc" }
+          },
+          "patterns": [
+            { "include": "#type-parameters-inner" }
+          ]
+        },
+        {
+          "comment": "Named function definition without type parameters",
+          "match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "storage.type.function.bbc" },
+            "2": { "name": "entity.name.function.bbc" }
+          }
+        },
+        {
+          "comment": "Anonymous function (lambda)",
+          "match": "\\b(func)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "storage.type.function.bbc" }
+          }
+        }
+      ]
+    },
+
+    "type-parameters-inner": {
+      "patterns": [
+        {
+          "name": "entity.name.type.parameter.bbc",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "punctuation.separator.colon.bbc",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.separator.comma.bbc",
+          "match": ","
+        },
+        { "include": "#comments" }
+      ]
+    },
+
+    "struct-definition": {
+      "match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.struct.bbc" },
+        "2": { "name": "entity.name.type.struct.bbc" }
+      }
+    },
+
+    "struct-init": {
+      "patterns": [
+        {
+          "comment": "Struct initialization with name: @StructName{...}",
+          "match": "(@)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\{)",
+          "captures": {
+            "1": { "name": "keyword.operator.struct-init.bbc" },
+            "2": { "name": "entity.name.type.struct.bbc" }
+          }
+        },
+        {
+          "comment": "Anonymous struct initialization: @{...}",
+          "match": "(@)\\s*(?=\\{)",
+          "captures": {
+            "1": { "name": "keyword.operator.struct-init.bbc" }
+          }
+        }
+      ]
+    },
+
+    "type-annotation": {
+      "patterns": [
+        {
+          "comment": "Error type with pointers: !**TypeName",
+          "match": "(!)?(\\**)\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s+[a-zA-Z_]|\\s*->|\\s*\\{|\\s*$|\\s*,|\\s*\\))",
+          "captures": {
+            "1": { "name": "keyword.operator.error-type.bbc" },
+            "2": { "name": "keyword.operator.pointer.bbc" },
+            "3": { "name": "entity.name.type.bbc" }
+          }
+        }
+      ]
+    },
+
+    "function-call": {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.bbc" }
+      }
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.bbc",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.comparison.bbc",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.assignment.bbc",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.bbc",
+          "match": "\\+|-|\\*|/"
+        },
+        {
+          "name": "keyword.operator.accessor.bbc",
+          "match": "\\."
+        },
+        {
+          "name": "keyword.operator.error.bbc",
+          "match": "\\?"
+        },
+        {
+          "name": "keyword.operator.logical-not.bbc",
+          "match": "!"
+        },
+        {
+          "name": "keyword.operator.at.bbc",
+          "match": "@"
+        }
+      ]
+    },
+
+    "identifiers": {
+      "name": "variable.other.bbc",
+      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.bbc",
+          "match": ","
+        },
+        {
+          "name": "punctuation.separator.colon.bbc",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.section.braces.begin.bbc",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.braces.end.bbc",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.section.parens.begin.bbc",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.bbc",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.section.brackets.begin.bbc",
+          "match": "["
+        },
+        {
+          "name": "punctuation.section.brackets.end.bbc",
+          "match": "]"
+        }
+      ]
+    }
+  }
+}

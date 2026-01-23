@@ -1,9 +1,17 @@
-func test(Int a, Int b) !Int {
-    a / b
+
+struct Toto {
+    Int a,
+    String b
 }
 
+
+
 func main () Int {
-    let a = 'a' + 1
-    println(a)
-    0
+    let b = @Toto {
+            a = 1,
+            b = "test"
+        }
+    b.b = "caca"
+    println(b.b)
+    b.a
 }

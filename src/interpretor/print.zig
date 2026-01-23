@@ -2,32 +2,37 @@ const std = @import("std");
 const Values = @import("values.zig");
 
 pub fn print(val: Values.Value) void {
+    const stdout = std.io.getStdOut().writer();
     switch (val) {
         .Int => |i| {
-            std.debug.print("{d}", .{i});
+            stdout.print("{d}", .{i}) catch {};
         },
         .Bool => |b| {
-            std.debug.print("{s}", .{if (b) "true" else "false"});
+            stdout.print("{s}", .{if (b) "true" else "false"}) catch {};
         },
         .Object => |o| {
-            std.debug.print("Object({s})", .{o.name});
+            stdout.print("Object({s})", .{o.name}) catch {};
         },
         .Null => {
-            std.debug.print("Null", .{});
+            stdout.print("Null", .{}) catch {};
         },
         .Function => |f| {
-            std.debug.print("Function({s})", .{f.name});
+            stdout.print("Function({s})", .{f.func.name}) catch {};
         },
         .Error => |e| {
-            std.debug.print("ErrorUnion: {s} at {s}", .{ e.message, e.reference });
+            stdout.print("ErrorUnion: {s} at {s}", .{ e.message, e.reference }) catch {};
         },
         .Char => |c| {
-            std.debug.print("{c}", .{c});
+            stdout.print("{c}", .{c}) catch {};
+        },
+        .String => |s| {
+            stdout.print("{s}", .{s.*.content.items}) catch {};
         },
     }
 }
 
 pub fn println(val: Values.Value) void {
+    const stdout = std.io.getStdOut().writer();
     print(val);
-    std.debug.print("\n", .{});
+    stdout.print("\n", .{}) catch {};
 }

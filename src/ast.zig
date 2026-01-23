@@ -42,38 +42,39 @@ pub const Type = struct {
     }
 
     pub fn toString(self: *Type, allocator: std.mem.Allocator) []const u8 {
-        var fallback_buf: [100]u8 = [_]u8{0} ** 100;
-        var buf = allocator.alloc(u8, 100) catch fallback_buf[0..];
-        var idx: usize = @intCast(0);
-        if (self.err) {
-            buf[idx] = '!';
-            idx += 1;
-        }
         _ = switch (self.base) {
-            .name => |name| for (name) |c| {
-                buf[idx] = c;
-                idx += 1;
+            .name => |name| {
+                if (self.err) {
+                    return std.fmt.allocPrint(allocator, "!{s}", .{name}) catch return "";
+                } else {
+                    return std.fmt.allocPrint(allocator, "{s}", .{name}) catch return "";
+                }
             },
             .function => |tfunc| {
-                for (tfunc.retype.toString(allocator)) |c| {
-                    buf[idx] = c;
-                    idx += 1;
+                var args = std.fmt.allocPrint(allocator, "(", .{}) catch return "";
+                for (tfunc.argtypes.items, 0..) |arg, i| {
+                    const argStr = arg.toString(allocator);
+                    args = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
+                        args,
+                        if (i > 0) ", " else "",
+                        argStr,
+                    }) catch return "";
                 }
-                buf[idx] = '(';
-                idx += 1;
-                for (tfunc.argtypes.items) |at| {
-                    for (at.toString(allocator)) |c| {
-                        buf[idx] = c;
-                        idx += 1;
-                    }
-                    buf[idx] = ' ';
-                    idx += 1;
+                args = std.fmt.allocPrint(allocator, "{s})", .{args}) catch return "";
+                if (self.err) {
+                    return std.fmt.allocPrint(allocator, "!{s} -> {s}", .{
+                        args,
+                        tfunc.retype.toString(allocator),
+                    }) catch return "";
+                } else {
+                    return std.fmt.allocPrint(allocator, "{s} -> {s}", .{
+                        args,
+                        tfunc.retype.toString(allocator),
+                    }) catch return "";
                 }
-                buf[idx] = ')';
-                idx += 1;
             },
         };
-        return buf[0..idx];
+        return "";
     }
 
     pub fn match(self: *const Type, other: *const Type) bool {
@@ -84,9 +85,19 @@ pub const Type = struct {
                 .name => |name2| std.mem.eql(u8, name, name2),
                 .function => false,
             },
-            .function => switch (other.base) {
+            .function => |f1| switch (other.base) {
                 .name => false,
-                .function => false, // [TODO]
+                .function => |f2| {
+                    if (!f1.retype.match(f2.retype))
+                        return false;
+                    if (f1.argtypes.items.len != f2.argtypes.items.len)
+                        return false;
+                    for (f1.argtypes.items, f2.argtypes.items) |a1, a2| {
+                        if (!a1.match(a2))
+                            return false;
+                    }
+                    return true;
+                },
             },
         };
     }
@@ -221,7 +232,7 @@ pub const Funcall = struct { // For a function call
 pub const Function = struct {
     arguments: ArrayList(*Arguments),
     return_type: *Type,
-    code: *Scope,
+    code: *Value,
     reference: []const u8,
 };
 
@@ -268,7 +279,7 @@ pub const Value = union(enum) {
     assignement: *Assignement,
     varDec: *VarDeclaration,
     structInit: *StructInit,
-    function: *Function,
+    function: *funcDef,
     freeKeyword: struct {
         val: *Value,
         reference: []const u8,
@@ -377,6 +388,7 @@ pub const funcDef = struct {
     code: *Scope,
     typeparam: ArrayList(TypeParam),
     reference: []const u8,
+    parent: ?*Type,
 
     pub fn print(self: *funcDef) void {
         std.debug.print("function '{s}' (", .{self.name});
@@ -389,13 +401,20 @@ pub const funcDef = struct {
         std.debug.print("\n", .{});
         self.code.print(0);
     }
+
+    pub fn getName(self: *funcDef, allocator: std.mem.Allocator) ![]const u8 {
+        if (self.parent) |parent| {
+            return try std.mem.concat(allocator, u8, &[_][]const u8{ parent.toString(allocator), ".", self.name });
+        } else return self.name;
+    }
 };
 
 pub const structDef = struct {
     habitants: std.hash_map.StringHashMap(*Type),
-    order: std.ArrayList([]const u8),
+    fields: std.ArrayList([]const u8),
     name: []const u8,
     reference: []const u8,
+    methods: std.hash_map.StringHashMap(*funcDef),
 
     pub fn habitantExist(self: *structDef, name: []const u8) bool {
         return self.habitants.contains(name);

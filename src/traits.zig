@@ -60,8 +60,8 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
     const int_type = try Types.CreateTypeInt(allocator, false);
     const int_type_err = try Types.CreateTypeInt(allocator, true);
     const bool_type = try Types.CreateTypeBool(allocator, false);
-    const char_type = try Types.CreateTypeString(allocator, false);
-    const string_type = try Types.CreateTypeChar(allocator, false);
+    const char_type = try Types.CreateTypeChar(allocator, false);
+    const string_type = try Types.CreateTypeString(allocator, false);
     const void_type = try Types.CreateTypeVoid(allocator, false);
 
     // +————————————————————————————————+
@@ -499,6 +499,9 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             for (print.args.items) |arg| {
                 try traitUnion(&ret, &try getTypeTraits(arg, ctx, allocator));
             }
+        },
+        .function => |func| {
+            try traitUnion(&ret, &try getTypeTraits(&ast.Value{ .scope = func.code }, ctx, allocator));
         },
         else => {
             std.debug.print("Unimplemented {}", .{instruction});

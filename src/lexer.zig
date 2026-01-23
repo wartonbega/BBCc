@@ -3,6 +3,7 @@ const parser = @import("parser.zig");
 const ast = @import("ast.zig");
 const errors = @import("errors.zig");
 const types = @import("types.zig");
+const analyser = @import("analyser.zig");
 
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
@@ -11,6 +12,8 @@ const TokenType = parser.TokenType;
 
 var stdout = std.io.getStdOut().writer();
 var stderr = std.io.getStdErr().writer();
+
+var globalAnonymousFunctionCounter: i32 = @intCast(0);
 
 const lexerError = error{ noFollowingToken, unexpectedToken, unimplementedValueType };
 
@@ -63,7 +66,7 @@ pub const tokenReader = struct {
 
 pub fn lexeType(reader: *tokenReader, allocator: Allocator) !*ast.Type {
     // Type :
-    //    | typefunction
+    //    | ((Type ident, )*) -> Type name
     //    | (!)? (*)* name
     const opt_error = (try reader.peek()).type == parser.TokenType.EXCLAM;
     if (opt_error)
@@ -73,6 +76,7 @@ pub fn lexeType(reader: *tokenReader, allocator: Allocator) !*ast.Type {
         _ = try reader.next();
         references_counter += 1;
     }
+
     const base_name = reader.consume(TokenType.IDENT).value;
 
     const ret = try allocator.create(ast.Type);
@@ -275,20 +279,23 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator
         },
         TokenType.FN_DEC => {
             const fn_dec_tok = reader.consume(TokenType.FN_DEC);
-            _ = reader.consume(TokenType.O_PAR);
             const args = try lexeArguments(reader, allocator);
             const rettype = try lexeType(reader, allocator);
             _ = reader.consume(TokenType.ARROW);
             const code = try lexeScope(reader, allocator);
 
             const ret = try allocator.create(ast.Value);
-            const function = try allocator.create(ast.Function);
-            function.* = ast.Function{
+            const function = try allocator.create(ast.funcDef);
+            function.* = ast.funcDef{
+                .name = try std.fmt.allocPrint(allocator, "anonymousFunctionObject@{d}", .{globalAnonymousFunctionCounter}),
                 .arguments = args,
                 .code = code,
                 .return_type = rettype,
+                .typeparam = .init(allocator),
                 .reference = fn_dec_tok.pos,
+                .parent = null,
             };
+            globalAnonymousFunctionCounter += 1;
             ret.* = ast.Value{ .function = function };
             return ret;
         },
@@ -318,11 +325,9 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator
     }
 }
 
-// TODO: inverser value6 et value5
-
 pub fn lexeValue6(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     // Value6:
-    //  | value7 (.IDENT)* // for the future it will be (.IDENT | [value0])*
+    //  | value7 ((.IDENT) | (args...))* // for the future it will be (.IDENT | [value0])*
 
     // lhs is a variable because the system works by aggregating
     // all the attributes together.
@@ -346,20 +351,7 @@ pub fn lexeValue6(reader: *tokenReader, allocator: Allocator) !*ast.Value {
             lhs = ret;
             break :blk true;
         },
-        else => false,
-    }) {}
-    return lhs;
-}
-
-pub fn lexeValue5(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // Value5:
-    //  | Value6(args) # funcall
-    //  | Value6
-    const lhs = try lexeValue6(reader, allocator);
-    if (!reader.canPeek())
-        return lhs;
-    switch ((try reader.peek()).type) {
-        TokenType.O_PAR => {
+        TokenType.O_PAR => blk: {
             const args = try lexeListedValue(reader, allocator);
             const ret = try allocator.create(ast.Value);
             const operation = try allocator.create(ast.Funcall);
@@ -368,10 +360,11 @@ pub fn lexeValue5(reader: *tokenReader, allocator: Allocator) !*ast.Value {
                 .func = lhs,
             };
             ret.* = ast.Value{ .funcall = operation };
-            return ret;
+            lhs = ret;
+            break :blk true;
         },
-        else => return lhs,
-    }
+        else => false,
+    }) {}
     return lhs;
 }
 
@@ -380,7 +373,7 @@ pub fn lexeValue4(reader: *tokenReader, allocator: Allocator) !*ast.Value {
     //  | Value5 TIMES Value4
     //  | Value5 DIV   Value4
     //  | Value5
-    const lhs = try lexeValue5(reader, allocator);
+    const lhs = try lexeValue6(reader, allocator);
     if (!reader.canPeek())
         return lhs;
     switch ((try reader.peek()).type) {
@@ -629,9 +622,13 @@ pub fn lexeFuncdef(reader: *tokenReader, allocator: Allocator) !*ast.funcDef {
     // Rule:
     //      func <typeimple>? name ( args* ) retype { code }
     //          with { code } witch is parsed by scope
-    _ = reader.consume(.FN_DEC); // func keyword
+    const fn_kwd = reader.consume(.FN_DEC); // func keyword
 
     const type_param = try lexeTypeParametrisation(reader, allocator);
+
+    if (reader.canPeek() and ((try reader.peek()).type == .PRINT or (try reader.peek()).type == .PRINTLN)) {
+        errors.bbcErrorExit("Unauthorized name '{s}' for a function, try '_{s}' if you really want to use that name", .{ (try reader.peek()).value, (try reader.peek()).value }, fn_kwd.pos);
+    }
 
     const name = reader.consume(TokenType.IDENT);
 
@@ -652,6 +649,7 @@ pub fn lexeFuncdef(reader: *tokenReader, allocator: Allocator) !*ast.funcDef {
         .code = scope,
         .typeparam = type_param,
         .reference = name.pos,
+        .parent = null,
     };
     return ret;
 }
@@ -666,24 +664,43 @@ pub fn lexeStructDef(reader: *tokenReader, allocator: Allocator) !*ast.structDef
     _ = reader.consume(.O_CUR);
 
     const ret = try allocator.create(ast.structDef);
-    ret.habitants = std.hash_map.StringHashMap(*ast.Type).init(allocator);
+    ret.habitants = .init(allocator);
     ret.reference = struct_keyword.pos;
     ret.name = st_name.value;
-    ret.order = std.ArrayList([]const u8).init(allocator);
+    ret.methods = .init(allocator);
+    ret.fields = .init(allocator);
 
     try ret.habitants.put("_count", (try types.CreateTypeInt(allocator, false)).decided);
     try ret.habitants.put("_size", (try types.CreateTypeInt(allocator, false)).decided);
 
-    try ret.order.append("_count");
-    try ret.order.append("_size"); // For now unused
+    try ret.fields.append("_count");
+    try ret.fields.append("_size"); // For now unused
+
+    const stc_type = try allocator.create(ast.Type);
+    stc_type.* = ast.Type{
+        .base = .{ .name = st_name.value },
+        .err = false,
+        .references = 0,
+    };
 
     while ((reader.canPeek()) and (try reader.peek()).type != .C_CUR) {
-        const ttype = try lexeType(reader, allocator);
-        const name = reader.consume(.IDENT);
-        try ret.habitants.put(name.value, ttype);
-        try ret.order.append(name.value);
-        if (reader.canPeek() and (try reader.peek()).type != .C_CUR)
-            _ = reader.consume(.COMMA);
+        switch ((try reader.peek()).type) {
+            .FN_DEC => {
+                var method = try lexeFuncdef(reader, allocator);
+                method.parent = stc_type;
+                try ret.habitants.put(method.name, try analyser.createFunctionSignature(method, allocator));
+                try ret.fields.append(method.name);
+                try ret.methods.put(method.name, method);
+            },
+            else => {
+                const ttype = try lexeType(reader, allocator);
+                const name = reader.consume(.IDENT);
+                try ret.habitants.put(name.value, ttype);
+                try ret.fields.append(name.value);
+                if (reader.canPeek() and (try reader.peek()).type != .C_CUR)
+                    _ = reader.consume(.COMMA);
+            },
+        }
     }
     _ = reader.consume(.C_CUR);
     return ret;
