@@ -1,6 +1,7 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const analyser = @import("analyser.zig");
+const Parser = @import("parser.zig");
 
 const ArrayList = std.ArrayList;
 
@@ -159,7 +160,7 @@ pub const binaryOperation = struct {
     rhs: *Value,
     operator: binOperator,
     lhs: *Value,
-    reference: []const u8,
+    reference: Parser.Location,
 
     pub fn print(self: *binaryOperation, rec: i32) void {
         _ = switch (self.operator) {
@@ -182,7 +183,7 @@ pub const RightUnaryOperators = union(enum) {
 pub const UnaryOperatorRight = struct {
     operator: RightUnaryOperators,
     expr: *Value,
-    reference: []const u8,
+    reference: Parser.Location,
 };
 
 // If statement, the multiple elif conditions are stored in conditions, and the corresponding scopes in scopes
@@ -191,19 +192,19 @@ pub const IfStmt = struct {
     conditions: ArrayList(*Value),
     scopes: ArrayList(*Value), // The different 'scopes'
     elsescope: ?*Value,
-    reference: []const u8,
+    reference: Parser.Location,
 };
 
 pub const WhileLoop = struct {
     condition: *Value,
     exec: *Value, // The code executed in loop
-    reference: []const u8,
+    reference: Parser.Location,
 };
 
 pub const VarDeclaration = struct {
     mutable: bool,
     name: []const u8,
-    reference: []const u8,
+    reference: Parser.Location,
     pub fn print(self: *VarDeclaration) void {
         std.debug.print("{s} {s}\n", .{ if (self.mutable) "const" else "mut", self.name });
     }
@@ -212,14 +213,14 @@ pub const VarDeclaration = struct {
 pub const Assignement = struct {
     lhs: *Value,
     rhs: *Value,
-    reference: []const u8,
+    reference: Parser.Location,
 };
 
 pub const ErrCheck = struct { // Value ? err_name scope;    Value: *Value, scope: *Value
     value: *Value,
     err: []const u8, // just the name
     scope: *Value, // The return value if 'value' has errors
-    reference: []const u8,
+    reference: Parser.Location,
 };
 
 pub const TypeCasting = struct { dest_type: *Type, orgn_Value: *Value };
@@ -233,11 +234,11 @@ pub const Function = struct {
     arguments: ArrayList(*Arguments),
     return_type: *Type,
     code: *Value,
-    reference: []const u8,
+    reference: Parser.Location,
 };
 
 pub const StructInit = struct {
-    reference: []const u8,
+    reference: Parser.Location,
     name: []const u8,
     habitants: std.StringHashMap(*Value),
 };
@@ -245,26 +246,26 @@ pub const StructInit = struct {
 pub const Value = union(enum) {
     intLit: struct {
         value: i32,
-        reference: []const u8,
+        reference: Parser.Location,
     },
     boolLit: struct {
         value: bool,
-        reference: []const u8,
+        reference: Parser.Location,
     },
     stringLit: struct {
         value: []const u8,
-        reference: []const u8,
+        reference: Parser.Location,
     }, // String literal : "Hello World"
     charLit: struct {
         value: u8,
-        reference: []const u8,
+        reference: Parser.Location,
     },
     nullLit: struct {
-        reference: []const u8,
+        reference: Parser.Location,
     },
     identifier: struct {
         name: []const u8,
-        reference: []const u8,
+        reference: Parser.Location,
     },
     parenthesis: *Value,
     //UnaryOperatorLeft(UnaryOperatorLeft),
@@ -282,12 +283,12 @@ pub const Value = union(enum) {
     function: *funcDef,
     freeKeyword: struct {
         val: *Value,
-        reference: []const u8,
+        reference: Parser.Location,
     },
     Print: struct {
         ln: bool, // new line
         args: ArrayList(*Value),
-        reference: []const u8,
+        reference: Parser.Location,
     },
     NULL: bool,
 
@@ -315,7 +316,7 @@ pub const Value = union(enum) {
         };
     }
 
-    pub fn getReference(self: *Value) []const u8 {
+    pub fn getReference(self: *Value) parser.Location {
         return switch (self.*) {
             .intLit => |value| value.reference,
             .charLit => |value| value.reference,
@@ -337,7 +338,7 @@ pub const Value = union(enum) {
             .structInit => |value| value.reference,
             .freeKeyword => |value| value.reference,
             .Print => |value| value.reference,
-            .NULL => "",
+            .NULL => parser.getInbuiltLocation(),
         };
     }
 };
@@ -345,9 +346,9 @@ pub const Value = union(enum) {
 pub const Scope = struct {
     code: ArrayList(*Value),
     ctx: *analyser.Context,
-    reference: []const u8,
+    reference: Parser.Location,
 
-    pub fn init(code: ArrayList(*Value), reference: []const u8, allocator: std.mem.Allocator) !*Scope {
+    pub fn init(code: ArrayList(*Value), reference: Parser.Location, allocator: std.mem.Allocator) !*Scope {
         const self = try allocator.create(Scope);
         self.* = Scope{
             .code = code,
@@ -367,7 +368,7 @@ pub const Scope = struct {
 pub const Arguments = struct {
     _type: *Type,
     name: []const u8,
-    reference: []const u8,
+    reference: Parser.Location,
 
     pub fn print(self: *Arguments) void {
         self._type.print();
@@ -378,7 +379,7 @@ pub const Arguments = struct {
 pub const TypeParam = struct {
     name: []const u8,
     traits: ArrayList([]const u8),
-    reference: []const u8,
+    reference: Parser.Location,
 };
 
 pub const funcDef = struct {
@@ -387,7 +388,7 @@ pub const funcDef = struct {
     return_type: *Type,
     code: *Scope,
     typeparam: ArrayList(TypeParam),
-    reference: []const u8,
+    reference: Parser.Location,
     parent: ?*Type,
 
     pub fn print(self: *funcDef) void {
@@ -413,7 +414,7 @@ pub const structDef = struct {
     habitants: std.hash_map.StringHashMap(*Type),
     fields: std.ArrayList([]const u8),
     name: []const u8,
-    reference: []const u8,
+    reference: Parser.Location,
     methods: std.hash_map.StringHashMap(*funcDef),
 
     pub fn habitantExist(self: *structDef, name: []const u8) bool {
@@ -438,6 +439,7 @@ pub const structDef = struct {
 pub const ProgInstructions = union(enum) {
     FuncDef: *funcDef,
     StructDef: *structDef,
+
     pub fn print(self: *ProgInstructions) void {
         switch (self.*) {
             .FuncDef => self.FuncDef.print(),

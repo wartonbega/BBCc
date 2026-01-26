@@ -20,7 +20,7 @@ pub fn print(val: Values.Value) void {
             stdout.print("Function({s})", .{f.func.name}) catch {};
         },
         .Error => |e| {
-            stdout.print("ErrorUnion: {s} at {s}", .{ e.message, e.reference }) catch {};
+            stdout.print("ErrorUnion: {s} at {s}", .{ e.message, e.reference.toString() }) catch {};
         },
         .Char => |c| {
             stdout.print("{c}", .{c}) catch {};

@@ -1,10 +1,11 @@
 const std = @import("std");
+const Parser = @import("parser.zig");
 
 var stderr = std.io.getStdErr().writer();
 const exit = std.process.exit;
 
-pub fn bbcError(comptime val: []const u8, args: anytype, pos: []const u8) void {
-    stderr.print("Error at {s}:\n", .{pos}) catch {
+pub fn bbcError(comptime val: []const u8, args: anytype, pos: Parser.Location) void {
+    stderr.print("Error at {s}:\n", .{pos.toString()}) catch {
         return;
     };
     stderr.print(val, args) catch {
@@ -12,8 +13,8 @@ pub fn bbcError(comptime val: []const u8, args: anytype, pos: []const u8) void {
     };
 }
 
-pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: []const u8) void {
-    stderr.print("Error at {s}:\n", .{pos}) catch {
+pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: Parser.Location) void {
+    stderr.print("Error at {s}:\n", .{pos.toString()}) catch {
         return;
     };
     stderr.print(val, args) catch {
@@ -23,8 +24,8 @@ pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: []const u8) vo
     exit(0);
 }
 
-pub fn bbcRuntimeError(comptime val: []const u8, args: anytype, pos: []const u8) void {
-    stderr.print("Runtime error at {s}:\n", .{pos}) catch {
+pub fn bbcRuntimeError(comptime val: []const u8, args: anytype, pos: Parser.Location) void {
+    stderr.print("Runtime error at {s}:\n", .{pos.toString()}) catch {
         return;
     };
     stderr.print(val, args) catch {

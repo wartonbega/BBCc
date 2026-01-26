@@ -106,6 +106,7 @@ pub fn interpreteScope(scope: *Ast.Scope, ctx: *Context) !Values.Value {
 
 pub fn interpreteFunction(func: *Ast.funcDef, args: std.ArrayList(Values.Value), parent: ?*Values.Object, ctx: *Context) !Values.Value {
     var child_ctx = ctx.createLocalChild();
+
     defer child_ctx.deinit();
 
     const func_name_str = try child_ctx.createStringLit(func.name);

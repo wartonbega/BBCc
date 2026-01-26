@@ -1,32 +1,11 @@
 {
-  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "BBC",
   "scopeName": "source.bbc",
-  "fileTypes": ["bbc"],
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#strings" },
-    { "include": "#characters" },
-    { "include": "#numbers" },
-    { "include": "#function-definition" },
-    { "include": "#struct-definition" },
-    { "include": "#keywords" },
-    { "include": "#constants" },
-    { "include": "#builtins" },
-    { "include": "#operators" },
-    { "include": "#struct-init" },
-    { "include": "#type-annotation" },
-    { "include": "#function-call" },
-    { "include": "#identifiers" },
-    { "include": "#punctuation" }
-  ],
-  "repository": {
-    "comments": {
-      "name": "comment.line.double-slash.bbc",
+    {
+      "name": "comment.line.bbc",
       "match": "//.*$"
     },
-
-    "strings": {
+    {
       "name": "string.quoted.double.bbc",
       "begin": "\"",
       "end": "\"",
@@ -37,8 +16,7 @@
         }
       ]
     },
-
-    "characters": {
+    {
       "name": "string.quoted.single.bbc",
       "begin": "'",
       "end": "'",
@@ -49,251 +27,213 @@
         }
       ]
     },
-
-    "numbers": {
-      "name": "constant.numeric.integer.bbc",
+    {
+      "name": "constant.numeric.bbc",
       "match": "\\b[0-9]+\\b"
     },
-
-    "constants": {
-      "patterns": [
-        {
-          "name": "constant.language.boolean.true.bbc",
-          "match": "\\btrue\\b"
-        },
-        {
-          "name": "constant.language.boolean.false.bbc",
-          "match": "\\bfalse\\b"
-        },
-        {
-          "name": "constant.language.null.bbc",
-          "match": "\\bnull\\b"
-        }
-      ]
+    {
+      "name": "constant.language.bbc",
+      "match": "\\b(true|false|null)\\b"
     },
-
-    "keywords": {
-      "patterns": [
-        {
-          "name": "keyword.control.conditional.bbc",
-          "match": "\\b(if|elif|else)\\b"
-        },
-        {
-          "name": "keyword.control.loop.bbc",
-          "match": "\\b(while|for)\\b"
-        },
-        {
-          "name": "keyword.declaration.variable.bbc",
-          "match": "\\blet\\b"
-        },
-        {
-          "name": "keyword.operator.memory.bbc",
-          "match": "\\bfree\\b"
-        },
-        {
-          "name": "storage.type.function.bbc",
-          "match": "\\bfunc\\b"
-        },
-        {
-          "name": "storage.type.struct.bbc",
-          "match": "\\bstruct\\b"
-        },
-        {
-          "name": "storage.type.enum.bbc",
-          "match": "\\benum\\b"
-        }
-      ]
+    {
+      "name": "keyword.control.bbc",
+      "match": "\\b(if|elif|else|while|for)\\b"
     },
-
-    "builtins": {
-      "patterns": [
-        {
-          "name": "support.function.builtin.bbc",
-          "match": "\\b(print|println)\\b"
-        }
-      ]
+    {
+      "name": "keyword.other.bbc",
+      "match": "\\b(let|free)\\b"
     },
-
-    "function-definition": {
-      "patterns": [
-        {
-          "comment": "Named function definition with type parameters",
-          "begin": "\\b(func)\\s*(<)",
-          "beginCaptures": {
-            "1": { "name": "storage.type.function.bbc" },
-            "2": { "name": "punctuation.definition.typeparameters.begin.bbc" }
-          },
-          "end": "(>)\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
-          "endCaptures": {
-            "1": { "name": "punctuation.definition.typeparameters.end.bbc" },
-            "2": { "name": "entity.name.function.bbc" }
-          },
-          "patterns": [
-            { "include": "#type-parameters-inner" }
-          ]
-        },
-        {
-          "comment": "Named function definition without type parameters",
-          "match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
-          "captures": {
-            "1": { "name": "storage.type.function.bbc" },
-            "2": { "name": "entity.name.function.bbc" }
-          }
-        },
-        {
-          "comment": "Anonymous function (lambda)",
-          "match": "\\b(func)\\s*(?=\\()",
-          "captures": {
-            "1": { "name": "storage.type.function.bbc" }
-          }
-        }
-      ]
+    {
+      "name": "support.function.bbc",
+      "match": "\\b(print|println)\\b"
     },
-
-    "type-parameters-inner": {
+    {
+      "comment": "Function with type parameters: func<T> name(",
+      "begin": "\\b(func)\\s*(<)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.bbc"
+        },
+        "2": {
+          "name": "punctuation.bracket.angle.bbc"
+        }
+      },
+      "end": "(>)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.bracket.angle.bbc"
+        },
+        "2": {
+          "name": "entity.name.function.bbc"
+        }
+      },
       "patterns": [
         {
           "name": "entity.name.type.parameter.bbc",
           "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
         },
         {
-          "name": "punctuation.separator.colon.bbc",
-          "match": ":"
-        },
-        {
-          "name": "punctuation.separator.comma.bbc",
-          "match": ","
-        },
-        { "include": "#comments" }
+          "name": "punctuation.separator.bbc",
+          "match": "[:,]"
+        }
       ]
     },
-
-    "struct-definition": {
+    {
+      "comment": "Function definition: func name(",
+      "match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": {
+          "name": "storage.type.function.bbc"
+        },
+        "2": {
+          "name": "entity.name.function.bbc"
+        }
+      }
+    },
+    {
+      "comment": "Anonymous function: func(",
+      "name": "storage.type.function.bbc",
+      "match": "\\bfunc\\b"
+    },
+    {
+      "comment": "Struct definition: struct Name",
       "match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "storage.type.struct.bbc" },
-        "2": { "name": "entity.name.type.struct.bbc" }
+        "1": {
+          "name": "storage.type.struct.bbc"
+        },
+        "2": {
+          "name": "entity.name.type.bbc"
+        }
       }
     },
-
-    "struct-init": {
-      "patterns": [
-        {
-          "comment": "Struct initialization with name: @StructName{...}",
-          "match": "(@)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\{)",
-          "captures": {
-            "1": { "name": "keyword.operator.struct-init.bbc" },
-            "2": { "name": "entity.name.type.struct.bbc" }
-          }
-        },
-        {
-          "comment": "Anonymous struct initialization: @{...}",
-          "match": "(@)\\s*(?=\\{)",
-          "captures": {
-            "1": { "name": "keyword.operator.struct-init.bbc" }
-          }
-        }
-      ]
-    },
-
-    "type-annotation": {
-      "patterns": [
-        {
-          "comment": "Error type with pointers: !**TypeName",
-          "match": "(!)?(\\**)\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s+[a-zA-Z_]|\\s*->|\\s*\\{|\\s*$|\\s*,|\\s*\\))",
-          "captures": {
-            "1": { "name": "keyword.operator.error-type.bbc" },
-            "2": { "name": "keyword.operator.pointer.bbc" },
-            "3": { "name": "entity.name.type.bbc" }
-          }
-        }
-      ]
-    },
-
-    "function-call": {
-      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+    {
+      "comment": "Enum definition: enum Name",
+      "match": "\\b(enum)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
       "captures": {
-        "1": { "name": "entity.name.function.call.bbc" }
+        "1": {
+          "name": "storage.type.enum.bbc"
+        },
+        "2": {
+          "name": "entity.name.type.bbc"
+        }
       }
     },
-
-    "operators": {
-      "patterns": [
-        {
-          "name": "keyword.operator.arrow.bbc",
-          "match": "->"
+    {
+      "comment": "Type annotation with error and pointers: !**TypeName",
+      "match": "(!)?([*]*)(int|bool|char|void|string)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.error.bbc"
         },
-        {
-          "name": "keyword.operator.comparison.bbc",
-          "match": "==|!=|<=|>=|<|>"
+        "2": {
+          "name": "keyword.operator.pointer.bbc"
         },
-        {
-          "name": "keyword.operator.assignment.bbc",
-          "match": "="
-        },
-        {
-          "name": "keyword.operator.arithmetic.bbc",
-          "match": "\\+|-|\\*|/"
-        },
-        {
-          "name": "keyword.operator.accessor.bbc",
-          "match": "\\."
-        },
-        {
-          "name": "keyword.operator.error.bbc",
-          "match": "\\?"
-        },
-        {
-          "name": "keyword.operator.logical-not.bbc",
-          "match": "!"
-        },
-        {
-          "name": "keyword.operator.at.bbc",
-          "match": "@"
+        "3": {
+          "name": "storage.type.primitive.bbc"
         }
-      ]
+      }
     },
-
-    "identifiers": {
-      "name": "variable.other.bbc",
-      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
-    },
-
-    "punctuation": {
-      "patterns": [
-        {
-          "name": "punctuation.separator.comma.bbc",
-          "match": ","
+    {
+      "comment": "Custom type with error and pointers: !**MyType",
+      "match": "(!)?([*]*)([A-Z][a-zA-Z0-9_]*)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.error.bbc"
         },
-        {
-          "name": "punctuation.separator.colon.bbc",
-          "match": ":"
+        "2": {
+          "name": "keyword.operator.pointer.bbc"
         },
-        {
-          "name": "punctuation.section.braces.begin.bbc",
-          "match": "\\{"
-        },
-        {
-          "name": "punctuation.section.braces.end.bbc",
-          "match": "\\}"
-        },
-        {
-          "name": "punctuation.section.parens.begin.bbc",
-          "match": "\\("
-        },
-        {
-          "name": "punctuation.section.parens.end.bbc",
-          "match": "\\)"
-        },
-        {
-          "name": "punctuation.section.brackets.begin.bbc",
-          "match": "["
-        },
-        {
-          "name": "punctuation.section.brackets.end.bbc",
-          "match": "]"
+        "3": {
+          "name": "entity.name.type.bbc"
         }
-      ]
+      }
+    },
+    {
+      "comment": "Function call: name(",
+      "match": "\\b([a-z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.call.bbc"
+        }
+      }
+    },
+    {
+      "comment": "Struct init: @Name{",
+      "match": "(@)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\{)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.at.bbc"
+        },
+        "2": {
+          "name": "entity.name.type.bbc"
+        }
+      }
+    },
+    {
+      "comment": "Anonymous struct init: @{",
+      "name": "keyword.operator.at.bbc",
+      "match": "@(?=\\s*\\{)"
+    },
+    {
+      "comment": "Error check operator: ? errname",
+      "match": "(\\?)\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.error-check.bbc"
+        },
+        "2": {
+          "name": "variable.other.error.bbc"
+        }
+      }
+    },
+    {
+      "comment": "Method call: .methodname(",
+      "match": "(\\.)([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.bbc"
+        },
+        "2": {
+          "name": "entity.name.function.call.bbc"
+        }
+      }
+    },
+    {
+      "comment": "Member access: .fieldname",
+      "match": "(\\.)([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.bbc"
+        },
+        "2": {
+          "name": "variable.other.member.bbc"
+        }
+      }
+    },
+    {
+      "name": "keyword.operator.arrow.bbc",
+      "match": "->"
+    },
+    {
+      "name": "keyword.operator.comparison.bbc",
+      "match": "==|!=|<=|>="
+    },
+    {
+      "name": "keyword.operator.bbc",
+      "match": "[=+\\-*/<>!?@]"
+    },
+    {
+      "name": "punctuation.comma.bbc",
+      "match": ","
+    },
+    {
+      "name": "punctuation.colon.bbc",
+      "match": ":"
+    },
+    {
+      "name": "punctuation.bracket.bbc",
+      "match": "[\\[\\]]"
     }
-  }
+  ]
 }

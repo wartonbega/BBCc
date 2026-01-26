@@ -1,17 +1,11 @@
-
-struct Toto {
-    Int a,
-    String b
+func main() Int {
+    let x = 23
+    let caca = if(f(false)) { 2} else {3}
+    caca
 }
 
-
-
-func main () Int {
-    let b = @Toto {
-            a = 1,
-            b = "test"
-        }
-    b.b = "caca"
-    println(b.b)
-    b.a
+func <T: (Add)> f(T x) Bool {
+    let p = 24
+    println(x + p)
+    true
 }

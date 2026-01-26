@@ -118,7 +118,6 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         .binaryOperator => |binop| return interpreteBinOp(binop, ctx),
         .funcall => |funcall| {
             const function = try interpreteValue(funcall.func, ctx);
-            defer function.decrementReference(ctx.heap);
             if (function != .Function)
                 return Itpr.ContextualError.UnknownFunction;
             var arguments = std.ArrayList(Values.Value).init(ctx.heap);
@@ -127,7 +126,13 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
                 try arguments.append(try interpreteValue(arg, ctx));
             }
             if (function.Function.parentObj) |pobj| {
-                return try Itpr.interpreteFunction(function.Function.func, arguments, pobj, ctx);
+                const ret = try Itpr.interpreteFunction(function.Function.func, arguments, pobj, ctx);
+                if (ret == .Object and ret.Object == pobj) {
+                    function.decrementReferenceNoCheck();
+                } else {
+                    function.decrementReference(ctx.heap);
+                }
+                return ret;
             } else return try Itpr.interpreteFunction(function.Function.func, arguments, null, ctx);
         },
         .If => |ifstmt| {
@@ -159,7 +164,6 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         },
         .unaryOperatorRight => |uop| {
             const operand = try interpreteValue(uop.expr, ctx);
-            defer operand.checkReference(ctx.heap);
             return operand.getHabitant(uop.operator.pointAttr);
         },
         .While => |_while| {

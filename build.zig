@@ -4,9 +4,6 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
-
-    // LLVM
-
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -17,14 +14,6 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-
-    //const llvm_dep = b.dependency("llvm", .{ // <== as declared in build.zig.zon
-    //    .target = target, // the same as passing `-Dtarget=<...>` to the library's build.zig script
-    //    .optimize = optimize, // ditto for `-Doptimize=<...>`
-    //});
-    //const llvm_mod = llvm_dep.module("llvm"); // <== get llvm bindings module
-    //// and/or
-    //const clang_mod = llvm_dep.module("clang"); // <== get clang bindings module
 
     // The rest of the compiler
     const exe_mod = b.createModule(.{
@@ -82,8 +71,4 @@ pub fn build(b: *std.Build) void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
-
-    //    exe.root_module.addImport("llvm", llvm_mod); // <== add llvm module
-    //    exe.root_module.addImport("clang", clang_mod); // <== add llvm module
-
 }

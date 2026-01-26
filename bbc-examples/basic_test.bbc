@@ -1,61 +1,61 @@
 
 // --------- STRUCTURE TEST ----------
-// struct Bstruct {
-//     Int toto,
-//     Int b,
-// }
-// 
-// func BstructFree(Bstruct this) Void {
-//     // Do nothing
-// }
-// 
-// struct Tstruct {
-//     Bstruct a,
-//     Int b,
-// }
-// 
-// func TstructFree (Tstruct this) Void {
-//     if this._count == 0 {
-//         BstructFree(this.a)
-//         free this
-//     }
-// }
-// 
-// 
-// func toto (Tstruct x) Int {
-//     x.a.toto
-// }
-// 
-// func main () !Int {
-//     let a = @Tstruct {
-//         a = @Bstruct { toto = 69, b = 67 },
-//         b = 87
-//     }
-//     toto(a)
-// }
+struct Bstruct {
+    Int toto,
+    Int b,
+}
+
+func BstructFree(Bstruct this) Void {
+    // Do nothing
+}
+
+struct Tstruct {
+    Bstruct a,
+    Int b,
+}
+
+func TstructFree (Tstruct this) Void {
+    if this._count == 0 {
+        BstructFree(this.a)
+        free this
+    }
+}
+
+
+func toto (Tstruct x) Int {
+    x.a.toto
+}
+
+func main () !Int {
+    let a = @Tstruct {
+        a = @Bstruct { toto = 69, b = 67 },
+        b = 87
+    }
+    toto(a)
+}
 
 
 // --------- POLYMORPHISME TEST ----------
-// func <Type: Add> test (Type x) Type {
-//     x + x
-// }
-//
-// func main () !Int {
-//     let a = test(1)
-//     let b = test(false)
-//     0
-// }
+func <Type: Add> test (Type x) Type {
+    x + x
+}
+
+func main () !Int {
+    let a = test(1)
+    let b = test(false)
+    0
+}
 
 
 // --------- CONDITION TEST ----------
-// func main () !Int {
-//     let a = if 2 == 2 {
-//              3
-//          } else {
-//              4
-//          }
-//     a
-// }
+func main () !Int {
+    let a = if 2 == 2 {
+             3
+         } else {
+             4
+         }
+    a
+}
 
 
 // --------- TRAIT TEST ----------
@@ -98,13 +98,13 @@ func test () Vec2 {
 }
 
 func main () !Int {
-    let a = test()
+    let a = test() 
     let b = test()
     2
 }
 
 // --------- BASIC TEST ----------
-// func main () !Int {
-//     let a = 1 + 2
-//     a
-// }
+func main () !Int {
+    let a = 1 + 2 
+    a
+}

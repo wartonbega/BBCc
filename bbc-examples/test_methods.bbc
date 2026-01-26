@@ -3,8 +3,10 @@ struct Toto {
     Int b,
 
     func test2(Int x) Int {
-        if x == 0 0
-        else 1
+        if (x == 0) 
+            0
+         else 
+            1
     }
 
     func _println() Toto {
@@ -13,14 +15,14 @@ struct Toto {
     }
 
     func dup() Toto {
-        @Toto {
+        @Toto{
             a = a,
             b = b
         }
     }
 }
 
-func main () Int {
+func main() Int {
     let a = @Toto{a = 1, b = 2}.dup()._println()
     0
 }

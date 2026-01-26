@@ -29,7 +29,7 @@ pub fn main() !void {
     }
 
     const tokens = try parser.parse(filename, &arena);
-    const prog = try lexer.lexeProgram(tokens, arena.allocator());
+    const prog = try lexer.lexeProgram(tokens, arena.allocator(), filename);
     const ctx = try analyser.Context.init(arena.allocator());
     try analyser.analyse(prog, ctx, arena.allocator());
 

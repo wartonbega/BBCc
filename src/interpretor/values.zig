@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
 const interpretor = @import("interpretor.zig");
+const Parser = @import("../parser.zig");
 
 const Context = interpretor.Context;
 
@@ -53,7 +54,7 @@ pub const Value = union(enum) {
     },
     Object: *Object,
     Error: struct {
-        reference: []const u8,
+        reference: Parser.Location,
         message: []const u8,
     },
 
@@ -91,6 +92,24 @@ pub const Value = union(enum) {
             else => unreachable,
         }
         return .Null;
+    }
+
+    pub fn decrementReferenceNoCheck(self: *const Value) void {
+        switch (self.*) {
+            .Object => |o| {
+                @constCast(o).references -= 1;
+            },
+            .String => |s| {
+                @constCast(s).references -= 1;
+            },
+            .Function => |f| {
+                if (f.parentObj) |p| {
+                    var s = Value{ .Object = p };
+                    s.decrementReferenceNoCheck();
+                }
+            },
+            else => {},
+        }
     }
 
     pub fn decrementReference(self: *const Value, allocator: std.mem.Allocator) void {
@@ -162,9 +181,22 @@ pub const Value = union(enum) {
             else => {},
         }
     }
+
+    pub fn getType(self: *const Value) []const u8 {
+        return switch (self.*) {
+            .Int => "Int",
+            .Bool => "Bool",
+            .Null => "Null",
+            .Char => "Char",
+            .String => "String",
+            .Function => "Function",
+            .Object => "Object",
+            .Error => "Error",
+        };
+    }
 };
 
-pub fn Plus(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Plus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -180,7 +212,7 @@ pub fn Plus(self: Value, other: Value, ctx: *Context, reference: []const u8) Val
     };
 }
 
-pub fn Minus(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Minus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -196,7 +228,7 @@ pub fn Minus(self: Value, other: Value, ctx: *Context, reference: []const u8) Va
     };
 }
 
-pub fn Times(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Times(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -207,7 +239,7 @@ pub fn Times(self: Value, other: Value, ctx: *Context, reference: []const u8) Va
     };
 }
 
-pub fn Div(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Div(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -218,7 +250,7 @@ pub fn Div(self: Value, other: Value, ctx: *Context, reference: []const u8) Valu
     };
 }
 
-pub fn Modulus(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Modulus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -229,7 +261,7 @@ pub fn Modulus(self: Value, other: Value, ctx: *Context, reference: []const u8) 
     };
 }
 
-pub fn Lt(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Lt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -240,7 +272,7 @@ pub fn Lt(self: Value, other: Value, ctx: *Context, reference: []const u8) Value
     };
 }
 
-pub fn Gt(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Gt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -251,7 +283,7 @@ pub fn Gt(self: Value, other: Value, ctx: *Context, reference: []const u8) Value
     };
 }
 
-pub fn Le(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Le(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -262,7 +294,7 @@ pub fn Le(self: Value, other: Value, ctx: *Context, reference: []const u8) Value
     };
 }
 
-pub fn Ge(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Ge(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -273,7 +305,7 @@ pub fn Ge(self: Value, other: Value, ctx: *Context, reference: []const u8) Value
     };
 }
 
-pub fn Equal(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Equal(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -288,7 +320,7 @@ pub fn Equal(self: Value, other: Value, ctx: *Context, reference: []const u8) Va
     };
 }
 
-pub fn NotEqual(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn NotEqual(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Int => switch (other) {
@@ -303,7 +335,7 @@ pub fn NotEqual(self: Value, other: Value, ctx: *Context, reference: []const u8)
     };
 }
 
-pub fn Or(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn Or(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Bool => switch (other) {
@@ -314,7 +346,7 @@ pub fn Or(self: Value, other: Value, ctx: *Context, reference: []const u8) Value
     };
 }
 
-pub fn And(self: Value, other: Value, ctx: *Context, reference: []const u8) Value {
+pub fn And(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
         .Bool => switch (other) {
