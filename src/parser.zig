@@ -1,29 +1,13 @@
 const std = @import("std");
+const position = @import("position.zig");
 
 /// Represents a position in a text document
-pub const Position = struct {
-    line: u32, // 0-based
-    character: u32, // 0-based (UTF-16 code units for LSP compatibility)
-};
-
+pub const Position = position.Position;
 /// Represents a range in a text document
-pub const Range = struct {
-    start: Position,
-    end: Position,
-};
+pub const Range = position.Range;
 
 /// Represents a location in a source file
-pub const Location = struct {
-    uri: []const u8, // file:// URI
-    range: Range,
-
-    pub fn toString(self: *const Location) []const u8 {
-        const alloc = std.heap.page_allocator;
-        return std.fmt.allocPrint(alloc, "{s}:{d}:{d}", .{ self.uri, self.range.start.line, self.range.start.character }) catch {
-            return "";
-        };
-    }
-};
+pub const Location = position.Location;
 
 pub fn getInbuiltLocation() Location {
     return Location{ .range = .{
@@ -103,10 +87,6 @@ pub const TokenType = enum {
     C_CUR,
 };
 
-// A token is
-//  The type of the token
-//  The value string literal
-//  The position in the document (e.g. "main.bbc:12:1")
 pub const Token = struct { type: TokenType, value: []const u8, location: Location };
 
 // Return the type of the token, wether the current identifier is a simple

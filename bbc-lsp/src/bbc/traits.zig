@@ -432,7 +432,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             switch (lhs_type) {
                 .decided => |_type| {
                     switch (_type.base) {
-                        .function => errors.bbcErrorExit(
+                        .function => try ctx.Error(
                             "'function' like type (here {s}) don't support operations",
                             .{_type.toString(allocator)},
                             binop.reference,
@@ -477,7 +477,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             switch (expr_type) {
                 .decided => |_type| {
                     switch (_type.base) {
-                        .function => errors.bbcErrorExit(
+                        .function => try ctx.Error(
                             "'function' like type (here {s}) don't support point attribute",
                             .{_type.toString(allocator)},
                             uop_right.reference,

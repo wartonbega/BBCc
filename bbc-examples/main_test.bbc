@@ -1,6 +1,6 @@
 func main() Int {
     let x = 23
-    let caca = if(f(false)) { 2} else {3}
+    let caca = if(f(false)) { 2 } else { 3 }
     caca
 }
 

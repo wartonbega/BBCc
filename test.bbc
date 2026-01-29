@@ -1,0 +1,26 @@
+struct Toto {
+    Int a,
+    Int b,
+}
+
+func test(Bool abcd) String {
+    let b = 2
+    let af = b + abcd
+    "zefzef"
+}
+
+func prout() Int {
+    let ba = 12
+    1
+}
+
+func main() Int {
+    let b = test(false)
+    let a = b
+    print(
+    {
+        let c = b
+        c
+    })
+    1
+}

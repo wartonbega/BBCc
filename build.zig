@@ -71,4 +71,20 @@ pub fn build(b: *std.Build) void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    // LSP Server executable
+    const lsp_exe = b.addExecutable(.{
+        .name = "bbc-lsp",
+        .root_source_file = b.path("./bbc-lsp/src/lsp_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    b.installArtifact(lsp_exe);
+
+    const lsp_run_cmd = b.addRunArtifact(lsp_exe);
+    lsp_run_cmd.step.dependOn(b.getInstallStep());
+
+    const lsp_run_step = b.step("lsp", "Run the LSP server");
+    lsp_run_step.dependOn(&lsp_run_cmd.step);
 }

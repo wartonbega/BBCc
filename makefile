@@ -20,4 +20,4 @@ output.asm: compile_compiler
 	./zig-out/bin/bbc
 
 compile_compiler: 
-	zig build
+	zig build 
