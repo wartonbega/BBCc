@@ -169,4 +169,99 @@ pub const Handlers = struct {
         const doc = self.store.get(uri) orelse return null;
         return doc.diagnostics.items;
     }
+
+    /// Handle textDocument/completion request
+    pub fn handleCompletion(
+        self: *Handlers,
+        params: protocol.CompletionParams,
+        arena: Allocator,
+    ) !?protocol.CompletionList {
+        std.log.info("Completion requested at {}:{}", .{
+            params.position.line,
+            params.position.character,
+        });
+
+        const doc = self.store.get(params.textDocument.uri) orelse {
+            std.log.info("Document not found", .{});
+            return null;
+        };
+
+        var items = std.ArrayList(protocol.CompletionItem).init(arena);
+
+        // Add BBC language keywords
+        const keywords = [_][]const u8{
+            "func",    "let",  "if",   "elif",  "else", "while",  "for",
+            "struct",  "enum", "true", "false", "null", "return", "print",
+            "println", "free",
+        };
+
+        for (keywords) |keyword| {
+            try items.append(.{
+                .label = keyword,
+                .kind = .Keyword,
+                .detail = "BBC keyword",
+            });
+        }
+
+        // Add built-in types
+        const types = [_][]const u8{ "Int", "Bool", "Char", "Void" };
+        for (types) |typename| {
+            try items.append(.{
+                .label = typename,
+                .kind = .Class,
+                .detail = "Built-in type",
+            });
+        }
+
+        // If we have a parsed program, add functions and structs
+        if (doc.program) |prog| {
+            for (prog.instructions.items) |inst| {
+                switch (inst.*) {
+                    .FuncDef => |func| {
+                        try items.append(.{
+                            .label = func.name,
+                            .kind = .Function,
+                            .detail = "Function",
+                        });
+                    },
+                    .StructDef => |structdef| {
+                        try items.append(.{
+                            .label = structdef.name,
+                            .kind = .Struct,
+                            .detail = "Struct",
+                        });
+
+                        // If triggered by '.', add struct fields
+                        if (params.context) |ctx| {
+                            if (ctx.triggerKind == .TriggerCharacter and
+                                ctx.triggerCharacter != null and
+                                std.mem.eql(u8, ctx.triggerCharacter.?, "."))
+                            {
+                                for (structdef.fields.items) |field_name| {
+                                    const field_type = structdef.habitants.get(field_name);
+                                    const detail = if (field_type) |t|
+                                        try std.fmt.allocPrint(arena, "Field: {s}", .{t.toString(arena)})
+                                    else
+                                        "Field";
+
+                                    try items.append(.{
+                                        .label = field_name,
+                                        .kind = .Field,
+                                        .detail = detail,
+                                    });
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        }
+
+        std.log.info("Returning {} completion items", .{items.items.len});
+
+        return protocol.CompletionList{
+            .isIncomplete = false,
+            .items = items.items,
+        };
+    }
 };

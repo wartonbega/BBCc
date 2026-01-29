@@ -198,14 +198,6 @@ pub const Server = struct {
             };
 
             try self.transport.sendResponse(response, arena);
-        } else if (std.mem.eql(u8, method, "shutdown")) {
-            std.log.info("Received shutdown request", .{});
-            const response = protocol.Response{
-                .id = id,
-                .result = .null,
-            };
-            try self.transport.sendResponse(response, arena);
-            // Don't set running = false here, wait for exit notification
         } else if (std.mem.eql(u8, method, "textDocument/completion")) {
             std.log.info("Processing completion request", .{});
 
@@ -216,6 +208,14 @@ pub const Server = struct {
             };
 
             try self.transport.sendResponse(response, arena);
+        } else if (std.mem.eql(u8, method, "shutdown")) {
+            std.log.info("Received shutdown request", .{});
+            const response = protocol.Response{
+                .id = id,
+                .result = .null,
+            };
+            try self.transport.sendResponse(response, arena);
+            // Don't set running = false here, wait for exit notification
         } else if (std.mem.eql(u8, method, "exit")) {
             std.log.info("Received exit notification, shutting down", .{});
             self.running = false;

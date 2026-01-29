@@ -1,5 +1,5 @@
 struct Toto {
-    Int a,
+    Int acaca,
     Int b,
 
     func test () Void {
@@ -24,7 +24,7 @@ func main() Int {
     let q = 1
     let d = @Toto{
         b = q,
-        a = 1
-    }
+        acaca = 1
+    }.acaca
     1
 }
