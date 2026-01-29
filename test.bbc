@@ -1,6 +1,10 @@
 struct Toto {
     Int a,
     Int b,
+
+    func test () Void {
+
+    }
 }
 
 func test(Bool abcd) String {
@@ -17,10 +21,10 @@ func prout() Int {
 func main() Int {
     let b = test(false)
     let a = b
-    print(
-    {
-        let c = b
-        c
-    })
+    let q = 1
+    let d = @Toto{
+        b = q,
+        a = 1
+    }
     1
 }

@@ -46,6 +46,85 @@ fn hintSearchValue(pos: position.Position, allocator: std.mem.Allocator, value: 
             const name = ident.name;
             if (ctx.variableExist(name))
                 return hinterInfo{ .ttype = .{ .variable = .{ ._type = ctx.getVariable(name).decided, .name = name } } };
+            if (ctx.functionExist(name)) {
+                const _type = analyser.createFunctionSignature(ctx.getFunction(name), allocator) catch {
+                    return hinterInfo{ .ttype = .{ .noInfo = {} } };
+                };
+                return hinterInfo{ .ttype = .{ .variable = .{
+                    ._type = _type,
+                    .name = name,
+                } } };
+            }
+        },
+        .varDec => |vd| {
+            if (ctx.variableExist(vd.name))
+                return hinterInfo{ .ttype = .{ .variable = .{ ._type = ctx.getVariable(vd.name).decided, .name = vd.name } } };
+        },
+        .binaryOperator => |binop| {
+            if (binop.rhs.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, binop.rhs, ctx);
+            if (binop.lhs.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, binop.lhs, ctx);
+        },
+        .errorCheck => |err| {
+            if (err.scope.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, err.scope, ctx);
+            if (err.value.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, err.value, ctx);
+        },
+        .funcall => |funcall| {
+            if (funcall.func.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, funcall.func, ctx);
+            for (funcall.args.items) |arg| {
+                if (arg.getReference().contains(pos))
+                    return hintSearchValue(pos, allocator, arg, ctx);
+            }
+        },
+        .function => |func| {
+            return hintSearchFuncdef(pos, allocator, func, ctx);
+        },
+        .parenthesis => |p| return hintSearchValue(pos, allocator, p, ctx),
+        .Print => |print| {
+            for (print.args.items) |arg| {
+                if (arg.getReference().contains(pos))
+                    return hintSearchValue(pos, allocator, arg, ctx);
+            }
+        },
+        .scope => |s| return hintSearchScope(pos, allocator, s),
+        .If => |ifs| {
+            for (ifs.conditions.items) |arg| {
+                if (arg.getReference().contains(pos))
+                    return hintSearchValue(pos, allocator, arg, ctx);
+            }
+            for (ifs.scopes.items) |arg| {
+                if (arg.getReference().contains(pos))
+                    return hintSearchValue(pos, allocator, arg, ctx);
+            }
+            if (ifs.elsescope) |esc| {
+                if (esc.getReference().contains(pos))
+                    return hintSearchValue(pos, allocator, esc, ctx);
+            }
+        },
+        .structInit => |stc| {
+            var it = stc.habitants.iterator();
+            while (it.next()) |hab| {
+                if (hab.value_ptr.*.getReference().contains(pos))
+                    return hintSearchValue(pos, allocator, hab.value_ptr.*, ctx);
+            }
+        },
+        .unaryOperatorRight => |uopr| {
+            if (uopr.expr.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, uopr.expr, ctx);
+            const t = Types.getTypeOfValue(uopr.expr, ctx, allocator) catch {
+                return hinterInfo{ .ttype = .{ .noInfo = {} } };
+            };
+            return hinterInfo{ .ttype = .{ .typeName = t.decided } };
+        },
+        .While => |wl| {
+            if (wl.condition.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, wl.condition, ctx);
+            if (wl.exec.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, wl.exec, ctx);
         },
         else => std.debug.print("unimplemented {}\n", .{value.*}),
     }
@@ -170,6 +249,33 @@ fn hintGetDefinitionValue(pos: position.Position, allocator: std.mem.Allocator, 
                 if (arg.getReference().contains(pos))
                     return hintGetDefinitionValue(pos, allocator, arg, ctx);
             }
+        },
+        .errorCheck => |err| {
+            if (err.value.getReference().contains(pos))
+                return hintGetDefinitionValue(pos, allocator, err.value, ctx);
+            if (err.scope.getReference().contains(pos))
+                return hintGetDefinitionValue(pos, allocator, err.scope, ctx);
+        },
+        .function => |func| {
+            return hintGetDefinitionFuncdef(pos, allocator, func, ctx);
+        },
+        .structInit => |stc| {
+            var it = stc.habitants.iterator();
+            while (it.next()) |hab| {
+                if (hab.value_ptr.*.getReference().contains(pos))
+                    return hintGetDefinitionValue(pos, allocator, hab.value_ptr.*, ctx);
+            }
+            if (ctx.typeDefExist(stc.name))
+                return ctx.getTypeDef(stc.name).reference;
+        },
+        .unaryOperatorRight => |uopr| {
+            if (uopr.expr.getReference().contains(pos))
+                return hintGetDefinitionValue(pos, allocator, uopr.expr, ctx);
+            const t = Types.getTypeOfValue(uopr.expr, ctx, allocator) catch {
+                return null;
+            };
+            if (t.decided.base == .name and ctx.typeDefExist(t.decided.base.name))
+                return ctx.getTypeDef(t.decided.base.name).reference;
         },
         else => std.debug.print("unimplemented {}\n", .{value.*}),
     }
