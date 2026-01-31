@@ -1,9 +1,9 @@
 struct Toto {
-    Int acaca,
+    Int a,
     Int b,
 
-    func test () Void {
-
+    func test () Toto {
+        
     }
 }
 
@@ -13,18 +13,31 @@ func test(Bool abcd) String {
     "zefzef"
 }
 
-func prout() Int {
-    let ba = 12
-    1
+func fibRec2(Int x) Int {
+    let ret = 
+        if x == 0 0
+        elif x == 1 1
+        else fibRec2(x - 1) + fibRec2(x - 2)
+    ret
 }
 
+
+
+func fib(Int x) Int {
+    let a = 0
+    let b = 1
+    while x > 0 { 
+        let c = a + b
+        b = a
+        a = c
+        x = x - 1
+    }
+    a
+}
+
+
 func main() Int {
-    let b = test(false)
-    let a = b
-    let q = 1
-    let d = @Toto{
-        b = q,
-        acaca = 1
-    }.acaca
-    1
+    println(fibRec2(10))
+    println(fib(10))
+    0
 }

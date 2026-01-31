@@ -120,31 +120,25 @@
       }
     },
     {
-      "comment": "Type annotation with error and pointers: !**TypeName",
-      "match": "(!)?([*]*)(int|bool|char|void|string)\\b",
+      "comment": "Type annotation with error and pointers: !TypeName",
+      "match": "(!)?(Int|Bool|Char|Void|String)\\b",
       "captures": {
         "1": {
           "name": "keyword.operator.error.bbc"
         },
         "2": {
-          "name": "keyword.operator.pointer.bbc"
-        },
-        "3": {
           "name": "storage.type.primitive.bbc"
         }
       }
     },
     {
       "comment": "Custom type with error and pointers: !**MyType",
-      "match": "(!)?([*]*)([A-Z][a-zA-Z0-9_]*)\\b",
+      "match": "(!)?([A-Z][a-zA-Z0-9_]*)\\b",
       "captures": {
         "1": {
           "name": "keyword.operator.error.bbc"
         },
         "2": {
-          "name": "keyword.operator.pointer.bbc"
-        },
-        "3": {
           "name": "entity.name.type.bbc"
         }
       }

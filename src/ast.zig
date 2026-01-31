@@ -367,6 +367,7 @@ pub const Scope = struct {
 
 pub const Arguments = struct {
     _type: *Type,
+    typeref: Parser.Location,
     name: []const u8,
     reference: Parser.Location,
 
@@ -386,6 +387,7 @@ pub const funcDef = struct {
     name: []const u8,
     arguments: ArrayList(*Arguments),
     return_type: *Type,
+    return_type_ref: Parser.Location,
     code: *Scope,
     typeparam: ArrayList(TypeParam),
     reference: Parser.Location,

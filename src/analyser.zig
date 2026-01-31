@@ -4,6 +4,7 @@ const Types = @import("types.zig");
 const errors = @import("errors.zig");
 const Traits = @import("traits.zig");
 const Parser = @import("parser.zig");
+const position = @import("position.zig");
 
 const exit = std.process.exit;
 
@@ -33,6 +34,7 @@ pub const function = struct {
 
 pub const Context = struct {
     variables: VarHashmap,
+    variables_references: std.StringHashMap(position.Location),
     trait_map: TraitHashmap,
     typealiases: TypeTraitHashmap, // For declaring <T: Add, Eq, ...> => (a: T, b: Int)
     type_implem: ImplemHashmap, // All the implementations for the types: eg Int => Add(Int), Sub(Int), etc...
@@ -40,6 +42,10 @@ pub const Context = struct {
     parent: ?*Context,
     functions_to_compile: ArrayList(functionVersion),
     functions: std.hash_map.StringHashMap(*ast.funcDef),
+
+    // Error handling
+    error_locations: std.ArrayList(position.Location),
+    error_messages: std.ArrayList([]u8),
 
     pub fn init(allocator: Allocator) !*Context {
         const self = try allocator.create(Context);
@@ -52,6 +58,7 @@ pub const Context = struct {
         const typedef = std.StringHashMap(*ast.structDef).init(allocator);
         self.* = .{
             .variables = vars,
+            .variables_references = .init(allocator),
             .parent = null,
             .trait_map = types,
             .typealiases = typealiases,
@@ -59,6 +66,8 @@ pub const Context = struct {
             .functions_to_compile = function_to_compile,
             .functions = functions,
             .typedef = typedef,
+            .error_locations = .init(allocator),
+            .error_messages = .init(allocator),
         };
         return self;
     }
@@ -76,6 +85,7 @@ pub const Context = struct {
         const typedef = try self.typedef.clone();
         new.* = .{
             .variables = vars,
+            .variables_references = .init(allocator),
             .parent = self,
             .trait_map = types,
             .typealiases = typealiases,
@@ -83,6 +93,8 @@ pub const Context = struct {
             .functions_to_compile = ArrayList(functionVersion).init(allocator),
             .functions = std.hash_map.StringHashMap(*ast.funcDef).init(allocator),
             .typedef = typedef,
+            .error_locations = .init(allocator),
+            .error_messages = .init(allocator),
         };
         return new;
     }
@@ -176,8 +188,9 @@ pub const Context = struct {
         } else try self.functions_to_compile.append(func);
     }
 
-    pub fn createVariable(self: *Context, name: []const u8, t: Types.Type) !void {
+    pub fn createVariable(self: *Context, name: []const u8, t: Types.Type, reference: position.Location) !void {
         try self.variables.put(name, t);
+        try self.variables_references.put(name, reference);
     }
 
     pub fn setVariable(self: *Context, name: []const u8, t: Types.Type) !void {
@@ -208,19 +221,44 @@ pub const Context = struct {
             return self.variables.contains(name) or parent.variableExist(name);
         return self.variables.contains(name);
     }
+
+    pub fn Error(self: *Context, comptime val: []const u8, args: anytype, pos: Parser.Location) !void {
+        if (self.parent) |parent|
+            try parent.Error(val, args, pos);
+        try self.error_locations.append(pos);
+        try self.error_messages.append(try std.fmt.allocPrint(std.heap.page_allocator, val, args));
+        try errors.bbcErrorExit(val, args, pos);
+    }
+
+    pub fn getTypeDefinition(self: *Context, t: *ast.Type) ?Parser.Location {
+        if (t.base == .name and self.typeDefExist(t.base.name)) {
+            return self.getTypeDef(t.base.name).reference;
+        }
+        return null;
+    }
+
+    pub fn getVariableDefinition(self: *Context, name: []const u8) ?Parser.Location {
+        if (self.variables_references.contains(name)) {
+            return self.variables_references.get(name).?;
+        } else if (self.parent) |parent| {
+            return parent.getVariableDefinition(name);
+        }
+
+        return null;
+    }
 };
 
 pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Allocator, rightType: Types.Type) !void {
     switch (value.*) {
         .varDec => |vardec| {
             if (rightType == .undecided) {
-                try ctx.createVariable(vardec.name, rightType);
+                try ctx.createVariable(vardec.name, rightType, vardec.reference);
                 return;
             }
             if (ctx.variableExist(vardec.name))
-                errors.bbcErrorExit("The variable {s} has already been declared before", .{vardec.name}, vardec.reference);
+                try ctx.Error("The variable {s} has already been declared before", .{vardec.name}, vardec.reference);
             const lhs_type = try Types.duplicateWithErrorUnion(allocator, rightType.decided, false);
-            try ctx.createVariable(vardec.name, lhs_type);
+            try ctx.createVariable(vardec.name, lhs_type, vardec.reference);
         },
         .unaryOperatorRight => |uop_right| {
             if (uop_right.operator == .pointAttr) {
@@ -228,25 +266,25 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                 if (left_value == .undecided)
                     return;
                 if (!ctx.typeDefExist(left_value.decided.base.name)) {
-                    errors.bbcErrorExit("Unknown struct type name '{s}'", .{left_value.toString(allocator)}, uop_right.reference);
+                    try ctx.Error("Unknown struct type name '{s}'", .{left_value.toString(allocator)}, uop_right.reference);
                 }
                 const hab_name = uop_right.operator.pointAttr;
                 const typedef = ctx.getTypeDef(left_value.decided.base.name);
                 if (!typedef.habitantExist(uop_right.operator.pointAttr))
-                    errors.bbcErrorExit("No habitant with name '{s}' in the structure '{s}'", .{ hab_name, typedef.name }, uop_right.reference);
+                    try ctx.Error("No habitant with name '{s}' in the structure '{s}'", .{ hab_name, typedef.name }, uop_right.reference);
             } else {
                 unreachable;
             }
         },
         .identifier => |ident| {
             if (!ctx.variableExist(ident.name))
-                errors.bbcErrorExit("The variable {s} has not been declared", .{ident.name}, ident.reference);
+                try ctx.Error("The variable {s} has not been declared", .{ident.name}, ident.reference);
             switch (rightType) {
                 .decided => {
                     const t = ctx.getVariable(ident.name);
                     const real_right_type = try Types.duplicateWithErrorUnion(allocator, rightType.decided, false);
                     switch (t) {
-                        .decided => if (!real_right_type.matchType(t)) errors.bbcErrorExit(
+                        .decided => if (!real_right_type.matchType(t)) try ctx.Error(
                             "The right side's type ({s}) of the assignation does not match the left side's ({s})",
                             .{ rightType.toString(allocator), t.toString(allocator) },
                             ident.reference,
@@ -255,7 +293,7 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                             // If the types matches all the traits inherited in the undecided type, then we can assign
                             // otherwise, error... =)
                             if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, real_right_type, traits))
-                                errors.bbcErrorExit(
+                                try ctx.Error(
                                     "Can't infer type '{s}' to '{s}', because it needs to have the following traits:\n {}",
                                     .{ real_right_type.toString(allocator), ident.name, traits },
                                     value.getReference(),
@@ -272,7 +310,7 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                     switch (var_type) {
                         .decided => |t| {
                             if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, var_type, traits))
-                                errors.bbcErrorExit(
+                                try ctx.Error(
                                     "The type '{s}' does not match all the traits required to be assigned to",
                                     .{t.toString(allocator)},
                                     value.getReference(),
@@ -285,7 +323,7 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                 },
             }
         },
-        else => errors.bbcErrorExit("Cannot assign to {}", .{value.*}, value.getReference()),
+        else => try ctx.Error("Cannot assign to {}", .{value.*}, value.getReference()),
     }
 }
 
@@ -303,10 +341,10 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
         .undecided => return f_signature,
         .decided => |t| {
             switch (t.base) {
-                .name => |name| errors.bbcErrorExit("Can't call a non-function value of type {s}", .{name}, func.func.getReference()),
+                .name => |name| try ctx.Error("Can't call a non-function value of type {s}", .{name}, func.func.getReference()),
                 .function => |functype| {
                     if (func.args.items.len != functype.argtypes.items.len)
-                        errors.bbcErrorExit("The function expects {d} arguments, but got {d}", .{ functype.argtypes.items.len, func.args.items.len }, func.func.getReference());
+                        try ctx.Error("The function expects {d} arguments, but got {d}", .{ functype.argtypes.items.len, func.args.items.len }, func.func.getReference());
                     // We can build the current function version, which shall have to be compiled later
                     var func_version = std.hash_map.StringHashMap(Types.Type).init(allocator);
                     for (func.args.items, functype.argtypes.items) |a, b| {
@@ -317,14 +355,14 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
                                 // If there's a type alias, then we get to assign it
                                 if (b.*.base == .name and typeparamContains(functype.typeparam, b.base.name)) {
                                     if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
-                                        errors.bbcErrorExit("'{s}' is already set to be type '{s}'", .{
+                                        try ctx.Error("'{s}' is already set to be type '{s}'", .{
                                             b.*.base.name,
                                             func_version.get(b.*.base.name).?.toString(allocator),
                                         }, a.getReference());
                                     }
                                     try func_version.put(b.*.base.name, argtype);
                                 } else if (!argtype.decided.match(b)) {
-                                    errors.bbcErrorExit("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, a.getReference());
+                                    try ctx.Error("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, a.getReference());
                                 }
                             },
                         }
@@ -337,7 +375,7 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
                     const ret_type = t.base.function.retype.base;
                     if (ret_type == .name and typeparamContains(t.base.function.typeparam, ret_type.name)) {
                         if (!func_version.contains(ret_type.name))
-                            errors.bbcErrorExit("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, func.func.getReference());
+                            try ctx.Error("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, func.func.getReference());
                         return func_version.get(ret_type.name).?;
                     }
                     return Types.Type{ .decided = t.base.function.retype };
@@ -352,7 +390,7 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
     // It's a bit like calling a the function "lhsName.opName(rhsType) => ?"
     const op_trait = Traits.traitFromOperator(op);
     if (!Traits.typeMatchTrait(&ctx.trait_map, &ctx.typealiases, lhsType, op_trait)) {
-        errors.bbcErrorExit(
+        try ctx.Error(
             "Can't use operator '{s}' on type '{s}', because it does implements the right trait",
             .{ ast.reprBinOp(op), lhsType.toString(allocator) },
             reference,
@@ -368,7 +406,7 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
                 if (!std.mem.eql(u8, func.name, ast.binOpFuncName(op)))
                     continue;
                 // Normaly, there should be the right amount of argument (because of the way functions are registered)
-                if (func.signature.argtypes.items.len != 1) errors.bbcErrorExit(
+                if (func.signature.argtypes.items.len != 1) try ctx.Error(
                     "The function {s} does not have enough arguments",
                     .{func.name},
                     reference,
@@ -386,7 +424,7 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
                     },
                 }
             }
-            errors.bbcErrorExit(
+            try ctx.Error(
                 "No matching operator implementation found for the given types {s} and {s}",
                 .{ t.toString(allocator), rhsType.toString(allocator) },
                 reference,
@@ -400,13 +438,13 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
     return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
 }
 
-pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.mem.Allocator.Error!Types.Type {
+pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std.mem.Allocator.Error || errors.bbcErrors)!Types.Type {
     switch (value.*) {
         .varDec => |vardec| {
             if (ctx.variableExist(vardec.name))
-                errors.bbcErrorExit("The variable {s} has already been declared before", .{vardec.name}, vardec.reference);
+                try ctx.Error("The variable {s} has already been declared before", .{vardec.name}, vardec.reference);
             const ret_type = try Types.CreateTypeVoid(allocator, false);
-            try ctx.createVariable(vardec.name, Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) });
+            try ctx.createVariable(vardec.name, Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) }, vardec.reference);
             return ret_type;
         },
         .binaryOperator => |binop| {
@@ -453,11 +491,11 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
                 if (scope_type.decided.err) has_error = true;
                 const real_scope_type = try Types.duplicateWithErrorUnion(allocator, scope_type.decided, base_scope_type.decided.err);
                 if (!real_scope_type.matchType(base_scope_type))
-                    errors.bbcErrorExit("The type of this scope don't match the return type of the if statement", .{}, scope.getReference());
+                    try ctx.Error("The type of this scope don't match the return type of the if statement", .{}, scope.getReference());
                 // Then the condition
                 const cond_type = try analyseValue(cond, ctx, allocator);
                 if (!cond_type.matchType(bool_type))
-                    errors.bbcErrorExit("The type of this condition does not match 'Bool'", .{}, cond.getReference());
+                    try ctx.Error("The type of this condition does not match 'Bool'", .{}, cond.getReference());
             }
 
             const void_type = try Types.CreateTypeVoid(allocator, false);
@@ -470,9 +508,9 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
                 if (else_type.decided.err) has_error = true;
                 const real_else_type = try Types.duplicateWithErrorUnion(allocator, else_type.decided, base_scope_type.decided.err);
                 if (!real_else_type.matchType(base_scope_type))
-                    errors.bbcErrorExit("The type of the else '{s}' scope don't match the type of this if statement", .{else_type.toString(allocator)}, else_scope.getReference());
+                    try ctx.Error("The type of the else '{s}' scope don't match the type of this if statement", .{else_type.toString(allocator)}, else_scope.getReference());
             } else if (!void_type.matchType(base_scope_type)) { // Else statements are required if the evaluation type insn't !Void
-                errors.bbcErrorExit("The if statements evalutates to type '{s}' and not '!Void', so it requires an else clause", .{base_scope_type.toString(allocator)}, ifstmt.reference);
+                try ctx.Error("The if statements evalutates to type '{s}' and not '!Void', so it requires an else clause", .{base_scope_type.toString(allocator)}, ifstmt.reference);
             }
             // base_scope_type.decided.err = has_error;
             return try Types.duplicateWithErrorUnion(allocator, base_scope_type.decided, has_error);
@@ -483,7 +521,7 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             if (ctx.functionExist(ident.name))
                 return Types.Type{ .decided = try createFunctionSignature(ctx.getFunction(ident.name), allocator) };
             if (!ctx.variableExist(ident.name))
-                errors.bbcErrorExit("Variable {s} is not declared (analysis)", .{ident.name}, ident.reference);
+                try ctx.Error("Variable {s} is not declared (analysis)", .{ident.name}, ident.reference);
 
             return ctx.getVariable(ident.name);
         },
@@ -499,11 +537,11 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             const val_type = try analyseValue(errcheck.value, ctx, allocator);
             const scope_type = try analyseValue(errcheck.scope, ctx, allocator);
             if (val_type == .decided and !val_type.decided.err)
-                errors.bbcErrorExit("The value don't have errors to check", .{}, errcheck.value.getReference());
+                try ctx.Error("The value don't have errors to check", .{}, errcheck.value.getReference());
             if (scope_type == .decided and scope_type.decided.err)
-                errors.bbcErrorExit("The default scope can't have errors", .{}, errcheck.scope.getReference());
+                try ctx.Error("The default scope can't have errors", .{}, errcheck.scope.getReference());
             if (!scope_type.matchType(val_type))
-                errors.bbcErrorExit("The scope's type don't match the value's type", .{}, errcheck.reference);
+                try ctx.Error("The scope's type don't match the value's type", .{}, errcheck.reference);
             // We can remove the error
             if (val_type == .decided)
                 return Types.duplicateWithErrorUnion(allocator, val_type.decided, false);
@@ -518,10 +556,10 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             defer void_type.deinit(allocator);
 
             if (!cond_type.matchType(bool_type))
-                errors.bbcErrorExit("The condition of the while loop should have type 'Bool'", .{}, whileloop.condition.getReference());
+                try ctx.Error("The condition of the while loop should have type 'Bool'", .{}, whileloop.condition.getReference());
             const exec_type = try analyseValue(whileloop.exec, ctx, allocator);
             if (!exec_type.matchType(void_type))
-                errors.bbcErrorExit("The exec'ed code should evaluate to type 'Void'", .{}, whileloop.exec.getReference());
+                try ctx.Error("The exec'ed code should evaluate to type 'Void'", .{}, whileloop.exec.getReference());
 
             // Can it evaluate to an error union ?
             const has_error = cond_type == .decided and cond_type.decided.err or exec_type == .decided and exec_type.decided.err;
@@ -531,10 +569,10 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
         .structInit => |stc_init| {
             const name = stc_init.name;
             if (!ctx.typeDefExist(name))
-                errors.bbcErrorExit("Type name '{s}' don't exist", .{name}, stc_init.reference);
+                try ctx.Error("Type name '{s}' don't exist", .{name}, stc_init.reference);
             const orgn = ctx.getTypeDef(name);
             if (stc_init.habitants.count() != orgn.habitants.count() - 2 - orgn.methods.count())
-                errors.bbcErrorExit(
+                try ctx.Error(
                     "Not the right number of habitants in the struct initialisation, expected {d} got {d}",
                     .{ stc_init.habitants.count(), orgn.habitants.count() },
                     stc_init.reference,
@@ -545,11 +583,11 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
             while (stc_hab_it.next()) |hab| {
                 const hab_name = hab.key_ptr.*;
                 if (!orgn.habitantExist(hab_name))
-                    errors.bbcErrorExit("Habitant '{s}' is undefined", .{hab_name}, stc_init.reference);
+                    try ctx.Error("Habitant '{s}' is undefined", .{hab_name}, stc_init.reference);
                 const hab_type = try analyseValue(hab.value_ptr.*, ctx, allocator);
                 // The type got does not match the expected one
                 if (!hab_type.match(orgn.getHabitant(hab_name)))
-                    errors.bbcErrorExit("Habitant '{s}' is expected to be of type '{s}' but is actually of type '{s}'", .{
+                    try ctx.Error("Habitant '{s}' is expected to be of type '{s}' but is actually of type '{s}'", .{
                         hab_name,
                         hab_type.toString(allocator),
                         orgn.getHabitant(hab_name).toString(allocator),
@@ -569,12 +607,12 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
                 if (left_value == .undecided)
                     return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
                 if (!ctx.typeDefExist(left_value.decided.base.name)) {
-                    errors.bbcErrorExit("Unknown struct type name '{s}'", .{left_value.toString(allocator)}, uop_right.reference);
+                    try ctx.Error("Unknown struct type name '{s}'", .{left_value.toString(allocator)}, uop_right.reference);
                 }
                 const hab_name = uop_right.operator.pointAttr;
                 const typedef = ctx.getTypeDef(left_value.decided.base.name);
                 if (!typedef.habitantExist(uop_right.operator.pointAttr))
-                    errors.bbcErrorExit("No habitant with name '{s}' in the structure '{s}'", .{ hab_name, typedef.name }, uop_right.reference);
+                    try ctx.Error("No habitant with name '{s}' in the structure '{s}'", .{ hab_name, typedef.name }, uop_right.reference);
                 return Types.Type{ .decided = typedef.getHabitant(hab_name) };
             } else {
                 unreachable;
@@ -619,7 +657,7 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) std.
     }
 }
 
-pub fn analyseScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) std.mem.Allocator.Error!Types.Type {
+pub fn analyseScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) (std.mem.Allocator.Error || errors.bbcErrors)!Types.Type {
     scope.ctx.deinit();
     allocator.destroy(scope.ctx); // Only works if the allocator used here is the same than in the lexer
 
@@ -662,7 +700,7 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
     const functype = try createFunctionSignature(func, allocator);
 
     // Associating the name with the type
-    try par_ctx.setVariable(func.name, Types.Type{ .decided = functype });
+    try par_ctx.createVariable(func.name, Types.Type{ .decided = functype }, func.reference);
 
     // We can create a child context for the function
     var ctx = try par_ctx.createChild(allocator);
@@ -678,19 +716,19 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
     if (func.parent) |parent| {
         const typedef = ctx.getTypeDef(parent.base.name);
         for (typedef.fields.items) |field_name| {
-            try ctx.setVariable(field_name, .{ .decided = typedef.habitants.get(field_name).? });
+            try ctx.createVariable(field_name, .{ .decided = typedef.habitants.get(field_name).? }, typedef.reference);
         }
         try ctx.setVariable("self", Types.Type{ .decided = parent });
     }
 
     if (!ctx.typeExist(func.return_type))
-        errors.bbcErrorExit("The type '{s}' doesn't exist", .{func.return_type.toString(allocator)}, func.reference);
+        try ctx.Error("The type '{s}' doesn't exist", .{func.return_type.toString(allocator)}, func.reference);
 
     // associating variables
     for (func.arguments.items) |arg| {
         if (!ctx.typeExist(arg._type))
-            errors.bbcErrorExit("The type '{s}' doesn't exist", .{arg._type.toString(allocator)}, arg.reference);
-        try ctx.setVariable(arg.name, Types.Type{ .decided = arg._type });
+            try ctx.Error("The type '{s}' doesn't exist", .{arg._type.toString(allocator)}, arg.reference);
+        try ctx.createVariable(arg.name, Types.Type{ .decided = arg._type }, arg.reference);
     }
 
     //    for (func.typeparam.items) |type_param| {
@@ -721,7 +759,7 @@ pub fn verifyFunctionTypeTraits(func: *ast.funcDef, ctx: *Context, allocator: Al
 
         const aliased = f_version.version.get(arg_type_name).?;
         if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, aliased, arg_type_traits))
-            errors.bbcErrorExit("The type '{s}' should implement [{s}], but doesn't", .{
+            try ctx.Error("The type '{s}' should implement [{s}], but doesn't", .{
                 aliased.toString(allocator),
                 try Traits.traitListToString(arg_type_traits, allocator),
             }, func.reference);
@@ -754,7 +792,7 @@ pub fn analyseStructDef(stct: *ast.structDef, ctx: *Context, allocator: Allocato
     var hab_it = stct.habitants.iterator();
     while (hab_it.next()) |hab| {
         if (!ctx.typeExist(hab.value_ptr.*))
-            errors.bbcErrorExit("The type '{s}' doesn't exist", .{hab.value_ptr.*.toString(allocator)}, stct.reference);
+            try ctx.Error("The type '{s}' doesn't exist", .{hab.value_ptr.*.toString(allocator)}, stct.reference);
     }
     try ctx.addTypeDef(stct.name, stct);
 
@@ -813,7 +851,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         switch (inst.*) {
             .FuncDef => |func| {
                 if (ctx.functionExist(func.name))
-                    errors.bbcErrorExit("Can't shadow the definition of function '{s}' previously defined here: {s}", .{ inst.FuncDef.name, ctx.getFunction(inst.FuncDef.name).reference.toString() }, inst.FuncDef.reference);
+                    try ctx.Error("Can't shadow the definition of function '{s}' previously defined here: {s}", .{ inst.FuncDef.name, ctx.getFunction(inst.FuncDef.name).reference.toString() }, inst.FuncDef.reference);
                 try ctx.setFunction(func.name, func);
             },
             else => {},
@@ -836,7 +874,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
             else => {},
         }
     }
-
+    var code_has_errors = false;
     // we can analyse the main function
     //try analyseFunction(ctx.getFunction("main"), ctx, allocator);
     while (ctx.functions_to_compile.items.len != 0) {
@@ -846,26 +884,41 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         const func_def = ctx.getFunction(func.name);
 
         if (!containFunction(func, funcs_to_compile)) {
-            try analyseFunction(func_def, ctx, allocator);
+            analyseFunction(func_def, ctx, allocator) catch |err| {
+                if (err == errors.bbcErrors.bbcContextualError) {
+                    code_has_errors = true;
+                } else {
+                    return err;
+                }
+            };
             try funcs_to_compile.append(func);
         }
 
         // We can verify that the current version of the function's types matches all the required traits
-        try verifyFunctionTypeTraits(func_def, func_def.code.ctx, allocator, func);
+        verifyFunctionTypeTraits(func_def, func_def.code.ctx, allocator, func) catch |err| {
+            if (err == errors.bbcErrors.bbcContextualError) {
+                code_has_errors = true;
+            } else {
+                return err;
+            }
+        };
     }
+
+    if (code_has_errors) return errors.bbcErrors.bbcContextualError;
+
     // Transpilation
     ctx.functions_to_compile = funcs_to_compile;
 
     if (!ctx.variableExist("main"))
-        errors.bbcErrorExit("Missing function 'main'", .{}, Parser.getInbuiltLocation());
+        try ctx.Error("Missing function 'main'", .{}, Parser.getInbuiltLocation());
 
     switch (ctx.getVariable("main").decided.base) {
         .function => |f| {
             if (!f.retype.match((try Types.CreateTypeInt(allocator, true)).decided))
-                errors.bbcErrorExit("The function 'main' should return !Int (or matching)", .{}, ctx.getFunction("main").reference);
+                try ctx.Error("The function 'main' should return !Int (or matching)", .{}, ctx.getFunction("main").reference);
             if (f.argtypes.items.len != 0)
-                errors.bbcErrorExit("'main' function takes no arguements", .{}, ctx.getFunction("main").reference);
+                try ctx.Error("'main' function takes no arguements", .{}, ctx.getFunction("main").reference);
         },
-        .name => errors.bbcErrorExit("'main' should be a function returning !Int", .{}, Parser.getInbuiltLocation()),
+        .name => try ctx.Error("'main' should be a function returning !Int", .{}, Parser.getInbuiltLocation()),
     }
 }

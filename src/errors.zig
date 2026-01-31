@@ -4,6 +4,8 @@ const Parser = @import("parser.zig");
 var stderr = std.io.getStdErr().writer();
 const exit = std.process.exit;
 
+pub const bbcErrors = error{bbcContextualError};
+
 pub fn bbcError(comptime val: []const u8, args: anytype, pos: Parser.Location) void {
     stderr.print("Error at {s}:\n", .{pos.toString()}) catch {
         return;
@@ -13,7 +15,7 @@ pub fn bbcError(comptime val: []const u8, args: anytype, pos: Parser.Location) v
     };
 }
 
-pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: Parser.Location) void {
+pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: Parser.Location) bbcErrors!void {
     stderr.print("Error at {s}:\n", .{pos.toString()}) catch {
         return;
     };
@@ -21,7 +23,7 @@ pub fn bbcErrorExit(comptime val: []const u8, args: anytype, pos: Parser.Locatio
         return;
     };
     stderr.print("\n", .{}) catch {};
-    exit(0);
+    return bbcErrors.bbcContextualError;
 }
 
 pub fn bbcRuntimeError(comptime val: []const u8, args: anytype, pos: Parser.Location) void {
@@ -32,5 +34,5 @@ pub fn bbcRuntimeError(comptime val: []const u8, args: anytype, pos: Parser.Loca
         return;
     };
     stderr.print("\n", .{}) catch {};
-    exit(0);
+    return;
 }

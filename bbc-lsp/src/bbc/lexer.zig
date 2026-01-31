@@ -375,7 +375,8 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator
         },
         else => {
             std.debug.print("{s}\n", .{@tagName((try reader.peek()).type)});
-            return lexerErrors.unimplementedValueType;
+            try lexerError("Unexpected token '{s}'", .{(try reader.peek()).type.toString()}, (try reader.peek()).location, reader);
+            return lexerErrors.unexpectedToken;
         },
     }
 }
@@ -799,7 +800,7 @@ pub fn lexeProgram(tokens: ArrayList(parser.Token), allocator: Allocator, uri: [
             //     // or the name of a file in the include dir
             // },
             else => {
-                try lexerError("Unexpected token {s}", .{token.type.toString()}, token.location, reader);
+                try lexerError("Unexpected token {s}", .{token.type.toString()}, token.location, &reader);
             },
         }
     }

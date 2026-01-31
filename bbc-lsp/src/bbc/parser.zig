@@ -385,11 +385,13 @@ fn parseChar(reader: *Reader) !Token {
 fn parseString(reader: *Reader) !Token {
     _ = reader.consume(1);
     var i: u32 = @intCast(1);
-    while (reader.peek(i)[reader.peek(i).len - 1] != '"') {
+    while (reader.canPeek(i) and reader.peek(i)[reader.peek(i).len - 1] != '"') {
         i += 1;
     }
     const ret = reader.consume(i - 1);
-    _ = reader.consume(1);
+    const closing = reader.consume(1)[0];
+    if (closing != '"')
+        return parser_error.UnexpectedToken;
     return .{ .type = TokenType.STRINGLIT, .value = ret, .location = reader.getCurrentLocation() };
 }
 

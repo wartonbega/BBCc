@@ -85,6 +85,57 @@ pub const TokenType = enum {
     C_BRA,
     O_CUR,
     C_CUR,
+
+    pub fn toString(self: *const TokenType) []const u8 {
+        return switch (self.*) {
+            .NULL => "",
+            .ANYTYPE => "",
+            .EQUAL => "=",
+            .DBL_EQUAL => "==",
+            .NOT_EQUAL => "!=",
+            .LESS_THAN => "<",
+            .MORE_THAN => ">",
+            .LESS_THAN_EQ => "<=",
+            .MORE_THAN_EQ => ">=",
+            .TIMES => "*",
+            .PLUS => "+",
+            .DIV => "/",
+            .MINUS => "-",
+            .DOT => ".",
+            .COMMA => ",",
+            .EXCLAM => "!",
+            .QUEST => "?",
+            .ARROW => "->",
+            .AT => "@",
+            .FN_DEC => "func",
+            .LET => "let",
+            .IF => "if",
+            .ELIF => "elif",
+            .ELSE => "else",
+            .WHILE => "while",
+            .FOR => "for",
+            .STRUCT => "struct",
+            .ENUM => "enum",
+            .FREE => "free",
+            .PRINT => "print",
+            .PRINTLN => "println",
+            .IMPORT => "import",
+            .IDENT => "identifier",
+            .INTLIT => "Int literal",
+            .CHARLIT => "Char literal",
+            .STRINGLIT => "String literal",
+            .TRUE => "true",
+            .FALSE => "false",
+            .NULL_KW => "null",
+            .COLON => ";",
+            .O_PAR => "(",
+            .C_PAR => ")",
+            .O_CUR => "{",
+            .C_CUR => "}",
+            .O_BRA => "[",
+            .C_BRA => "]",
+        };
+    }
 };
 
 pub const Token = struct { type: TokenType, value: []const u8, location: Location };
@@ -183,7 +234,7 @@ fn isDirOperator(char: u8) bool {
 // The parser errors
 const parser_error = error{ IntegerLiteralTooLong, IdentifierTooLong, UnexpectedToken, UnknownOperator, ExpectedToken };
 
-const Reader = struct {
+pub const Reader = struct {
     content: []const u8,
     pos: u32,
     filename: []const u8,
@@ -215,9 +266,13 @@ const Reader = struct {
         return self.content[self.pos .. self.pos + amount];
     }
 
+    pub fn setBeginToken(self: *Reader) void {
+        self.lastPos = getCurrentPos(self);
+    }
+
     pub fn consume(self: *Reader, amount: u32) []const u8 {
         defer self.pos += amount;
-        self.lastPos = getCurrentPos(self);
+
         if (self.pos + amount >= self.content.len) {
             return self.content[self.pos..self.content.len];
         }
@@ -241,7 +296,24 @@ const Reader = struct {
         };
     }
 
-    pub fn getCurrentPosition(self: *Reader) Location {
+    pub fn getNextPos(self: *Reader) Position {
+        var line = @as(u32, 0);
+        var col = @as(u32, 1);
+        for (0..self.pos) |i| {
+            if (self.content[i] == '\n') {
+                col = 1;
+                line += 1;
+            } else {
+                col += 1;
+            }
+        }
+        return Position{
+            .character = col,
+            .line = line,
+        };
+    }
+
+    pub fn getCurrentLocation(self: *Reader) Location {
         return Location{
             .range = Range{ .start = self.lastPos, .end = self.getCurrentPos() },
             .uri = self.filename,
@@ -284,7 +356,7 @@ fn parseIntegerLiteral(reader: *Reader, allocator: std.mem.Allocator) !Token {
         return parser_error.IntegerLiteralTooLong;
     }
     const value = buffer[0..pos];
-    return .{ .type = TokenType.INTLIT, .value = value, .location = reader.getCurrentPosition() };
+    return .{ .type = TokenType.INTLIT, .value = value, .location = reader.getCurrentLocation() };
 }
 
 fn parseIdentifier(reader: *Reader, allocator: std.mem.Allocator) !Token {
@@ -298,7 +370,7 @@ fn parseIdentifier(reader: *Reader, allocator: std.mem.Allocator) !Token {
         return parser_error.IdentifierTooLong;
     }
     const value = buffer[0..pos];
-    return .{ .type = getIdentType(value), .value = value, .location = reader.getCurrentPosition() };
+    return .{ .type = getIdentType(value), .value = value, .location = reader.getCurrentLocation() };
 }
 
 fn parseChar(reader: *Reader) !Token {
@@ -307,7 +379,7 @@ fn parseChar(reader: *Reader) !Token {
     const closing_quote = reader.consume(1)[0];
     if (closing_quote != '\'')
         return parser_error.ExpectedToken;
-    return .{ .type = TokenType.CHARLIT, .value = char, .location = reader.getCurrentPosition() };
+    return .{ .type = TokenType.CHARLIT, .value = char, .location = reader.getCurrentLocation() };
 }
 
 fn parseString(reader: *Reader) !Token {
@@ -318,7 +390,7 @@ fn parseString(reader: *Reader) !Token {
     }
     const ret = reader.consume(i - 1);
     _ = reader.consume(1);
-    return .{ .type = TokenType.STRINGLIT, .value = ret, .location = reader.getCurrentPosition() };
+    return .{ .type = TokenType.STRINGLIT, .value = ret, .location = reader.getCurrentLocation() };
 }
 
 fn ignoreLineComment(reader: *Reader) void {
@@ -331,19 +403,19 @@ fn parseOperator(reader: *Reader) !Token {
     // -> == <= >= ...
     if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "->")) {
         _ = reader.consume(2);
-        return .{ .type = TokenType.ARROW, .value = "->", .location = reader.getCurrentPosition() };
+        return .{ .type = TokenType.ARROW, .value = "->", .location = reader.getCurrentLocation() };
     } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "==")) {
         _ = reader.consume(2);
-        return .{ .type = TokenType.DBL_EQUAL, .value = "==", .location = reader.getCurrentPosition() };
+        return .{ .type = TokenType.DBL_EQUAL, .value = "==", .location = reader.getCurrentLocation() };
     } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "!=")) {
         _ = reader.consume(2);
-        return .{ .type = TokenType.NOT_EQUAL, .value = "!=", .location = reader.getCurrentPosition() };
+        return .{ .type = TokenType.NOT_EQUAL, .value = "!=", .location = reader.getCurrentLocation() };
     } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "<=")) {
         _ = reader.consume(2);
-        return .{ .type = TokenType.LESS_THAN_EQ, .value = "<=", .location = reader.getCurrentPosition() };
+        return .{ .type = TokenType.LESS_THAN_EQ, .value = "<=", .location = reader.getCurrentLocation() };
     } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), ">=")) {
         _ = reader.consume(2);
-        return .{ .type = TokenType.MORE_THAN_EQ, .value = ">=", .location = reader.getCurrentPosition() };
+        return .{ .type = TokenType.MORE_THAN_EQ, .value = ">=", .location = reader.getCurrentLocation() };
     }
     // 1-char long operators :
     // + - / * . : ?
@@ -352,18 +424,18 @@ fn parseOperator(reader: *Reader) !Token {
     else {
         const char = reader.peek(1)[0];
         const ret = switch (char) {
-            '=' => Token{ .type = TokenType.EQUAL, .value = "=", .location = reader.getCurrentPosition() },
-            '.' => Token{ .type = TokenType.DOT, .value = ".", .location = reader.getCurrentPosition() },
-            ':' => Token{ .type = TokenType.COLON, .value = ":", .location = reader.getCurrentPosition() },
-            '?' => Token{ .type = TokenType.QUEST, .value = "?", .location = reader.getCurrentPosition() },
-            '*' => Token{ .type = TokenType.TIMES, .value = "*", .location = reader.getCurrentPosition() },
-            '/' => Token{ .type = TokenType.DIV, .value = "/", .location = reader.getCurrentPosition() },
-            '+' => Token{ .type = TokenType.PLUS, .value = "+", .location = reader.getCurrentPosition() },
-            '-' => Token{ .type = TokenType.MINUS, .value = "-", .location = reader.getCurrentPosition() },
-            '>' => Token{ .type = TokenType.MORE_THAN, .value = ">", .location = reader.getCurrentPosition() },
-            '<' => Token{ .type = TokenType.LESS_THAN, .value = "<", .location = reader.getCurrentPosition() },
-            '!' => Token{ .type = TokenType.EXCLAM, .value = "!", .location = reader.getCurrentPosition() },
-            '@' => Token{ .type = TokenType.AT, .value = "@", .location = reader.getCurrentPosition() },
+            '=' => Token{ .type = TokenType.EQUAL, .value = "=", .location = reader.getCurrentLocation() },
+            '.' => Token{ .type = TokenType.DOT, .value = ".", .location = reader.getCurrentLocation() },
+            ':' => Token{ .type = TokenType.COLON, .value = ":", .location = reader.getCurrentLocation() },
+            '?' => Token{ .type = TokenType.QUEST, .value = "?", .location = reader.getCurrentLocation() },
+            '*' => Token{ .type = TokenType.TIMES, .value = "*", .location = reader.getCurrentLocation() },
+            '/' => Token{ .type = TokenType.DIV, .value = "/", .location = reader.getCurrentLocation() },
+            '+' => Token{ .type = TokenType.PLUS, .value = "+", .location = reader.getCurrentLocation() },
+            '-' => Token{ .type = TokenType.MINUS, .value = "-", .location = reader.getCurrentLocation() },
+            '>' => Token{ .type = TokenType.MORE_THAN, .value = ">", .location = reader.getCurrentLocation() },
+            '<' => Token{ .type = TokenType.LESS_THAN, .value = "<", .location = reader.getCurrentLocation() },
+            '!' => Token{ .type = TokenType.EXCLAM, .value = "!", .location = reader.getCurrentLocation() },
+            '@' => Token{ .type = TokenType.AT, .value = "@", .location = reader.getCurrentLocation() },
             else => parser_error.UnknownOperator,
         };
         _ = reader.consume(1);
@@ -388,6 +460,7 @@ pub fn parse(filename: []const u8, arena: *std.heap.ArenaAllocator) !std.ArrayLi
 
         // Otherwise, we can read the first character
         const char = reader.peek(1)[0];
+        reader.setBeginToken();
         if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "//")) { // line comment
             ignoreLineComment(&reader);
         } else if (isNumeric(char)) {
@@ -401,19 +474,19 @@ pub fn parse(filename: []const u8, arena: *std.heap.ArenaAllocator) !std.ArrayLi
         } else if (char == '"') {
             try tokens.append(try parseString(&reader));
         } else if (char == ',') {
-            try tokens.append(.{ .type = TokenType.COMMA, .value = reader.consume(1), .location = reader.getCurrentPosition() });
+            try tokens.append(.{ .type = TokenType.COMMA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (char == '{') {
-            try tokens.append(.{ .type = TokenType.O_CUR, .value = reader.consume(1), .location = reader.getCurrentPosition() });
+            try tokens.append(.{ .type = TokenType.O_CUR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (char == '}') {
-            try tokens.append(.{ .type = TokenType.C_CUR, .value = reader.consume(1), .location = reader.getCurrentPosition() });
+            try tokens.append(.{ .type = TokenType.C_CUR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (char == '(') {
-            try tokens.append(.{ .type = TokenType.O_PAR, .value = reader.consume(1), .location = reader.getCurrentPosition() });
+            try tokens.append(.{ .type = TokenType.O_PAR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (char == ')') {
-            try tokens.append(.{ .type = TokenType.C_PAR, .value = reader.consume(1), .location = reader.getCurrentPosition() });
+            try tokens.append(.{ .type = TokenType.C_PAR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (char == '[') {
-            try tokens.append(.{ .type = TokenType.O_BRA, .value = reader.consume(1), .location = reader.getCurrentPosition() });
+            try tokens.append(.{ .type = TokenType.O_BRA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (char == ')') {
-            try tokens.append(.{ .type = TokenType.C_BRA, .value = reader.consume(1), .location = reader.getCurrentPosition() });
+            try tokens.append(.{ .type = TokenType.C_BRA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (isWhiteSpace(char)) {
             _ = reader.consume(1);
         } else {
@@ -422,5 +495,51 @@ pub fn parse(filename: []const u8, arena: *std.heap.ArenaAllocator) !std.ArrayLi
         }
     }
     //print_toks(tokens);
+    return tokens;
+}
+
+/// Parse text from memory instead of a file (for LSP)
+pub fn parseFromText(arena: *std.heap.ArenaAllocator, reader: *Reader) !std.ArrayList(Token) {
+    const allocator = arena.allocator();
+
+    var tokens = std.ArrayList(Token).init(allocator);
+
+    while (true) {
+        if (!reader.canPeek(1)) break;
+
+        const char = reader.peek(1)[0];
+        reader.setBeginToken();
+        if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "//")) {
+            ignoreLineComment(reader);
+        } else if (isNumeric(char)) {
+            try tokens.append(try parseIntegerLiteral(reader, allocator));
+        } else if (isAlpha(char)) {
+            try tokens.append(try parseIdentifier(reader, allocator));
+        } else if (isDirOperator(char)) {
+            try tokens.append(try parseOperator(reader));
+        } else if (char == '\'') {
+            try tokens.append(try parseChar(reader));
+        } else if (char == '"') {
+            try tokens.append(try parseString(reader));
+        } else if (char == ',') {
+            try tokens.append(.{ .type = TokenType.COMMA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
+        } else if (char == '{') {
+            try tokens.append(.{ .type = TokenType.O_CUR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
+        } else if (char == '}') {
+            try tokens.append(.{ .type = TokenType.C_CUR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
+        } else if (char == '(') {
+            try tokens.append(.{ .type = TokenType.O_PAR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
+        } else if (char == ')') {
+            try tokens.append(.{ .type = TokenType.C_PAR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
+        } else if (char == '[') {
+            try tokens.append(.{ .type = TokenType.O_BRA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
+        } else if (char == ']') {
+            try tokens.append(.{ .type = TokenType.C_BRA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
+        } else if (isWhiteSpace(char)) {
+            _ = reader.consume(1);
+        } else {
+            return parser_error.UnexpectedToken;
+        }
+    }
     return tokens;
 }

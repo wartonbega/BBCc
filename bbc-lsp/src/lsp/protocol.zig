@@ -150,6 +150,7 @@ pub const ServerCapabilities = struct {
     definitionProvider: ?bool = null,
     referencesProvider: ?bool = null,
     documentSymbolProvider: ?bool = null,
+    inlayHintProvider: ?bool = null,
 };
 
 pub const TextDocumentSyncKind = enum(u8) {
@@ -302,4 +303,28 @@ pub const PublishDiagnosticsParams = struct {
     uri: []const u8,
     version: ?i32 = null,
     diagnostics: []const Diagnostic,
+};
+
+// ============================================================================
+// Inlayed Hints
+// ============================================================================
+
+// Add these to protocol.zig
+
+pub const InlayHintKind = enum(u8) {
+    Type = 1,
+    Parameter = 2,
+};
+
+pub const InlayHint = struct {
+    position: Position,
+    label: []const u8,
+    kind: ?InlayHintKind = null,
+    paddingLeft: ?bool = null,
+    paddingRight: ?bool = null,
+};
+
+pub const InlayHintParams = struct {
+    textDocument: TextDocumentIdentifier,
+    range: Range,
 };

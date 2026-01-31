@@ -208,6 +208,35 @@ pub const Server = struct {
             };
 
             try self.transport.sendResponse(response, arena);
+        } else if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
+            std.log.info("Processing inlay hints request", .{});
+
+            const params_value = root.object.get("params") orelse return error.MissingParams;
+            const params = try std.json.parseFromValue(
+                protocol.InlayHintParams,
+                arena,
+                params_value,
+                .{ .ignore_unknown_fields = true },
+            );
+
+            const hints = try self.handlers.handleInlayHint(params.value, arena);
+
+            // Serialize hints to JSON and parse back to std.json.Value
+            var result_string = std.ArrayList(u8).init(arena);
+            try std.json.stringify(hints, .{}, result_string.writer());
+            const result_parsed = try std.json.parseFromSlice(
+                std.json.Value,
+                arena,
+                result_string.items,
+                .{},
+            );
+
+            const response = protocol.Response{
+                .id = id,
+                .result = result_parsed.value,
+            };
+
+            try self.transport.sendResponse(response, arena);
         } else if (std.mem.eql(u8, method, "shutdown")) {
             std.log.info("Received shutdown request", .{});
             const response = protocol.Response{

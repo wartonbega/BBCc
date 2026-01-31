@@ -19,7 +19,6 @@ pub const Handlers = struct {
         };
     }
 
-    /// Handle initialize request
     pub fn handleInitialize(
         self: *Handlers,
         params: protocol.InitializeParams,
@@ -29,7 +28,6 @@ pub const Handlers = struct {
 
         self.initialized = true;
 
-        // Create trigger characters as a slice
         const trigger_chars = try arena.alloc([]const u8, 2);
         trigger_chars[0] = ".";
         trigger_chars[1] = "@";
@@ -42,6 +40,7 @@ pub const Handlers = struct {
                     .triggerCharacters = trigger_chars,
                 },
                 .definitionProvider = true,
+                .inlayHintProvider = true, // ← Add this
             },
             .serverInfo = .{
                 .name = "bbc-lsp",
@@ -81,6 +80,38 @@ pub const Handlers = struct {
             change.text,
             params.textDocument.version,
         );
+    }
+
+    /// Handle textDocument/inlayHint request
+    pub fn handleInlayHint(
+        self: *Handlers,
+        params: protocol.InlayHintParams,
+        arena: Allocator,
+    ) ![]protocol.InlayHint {
+        std.log.info("Inlay hints requested for range {}:{} to {}:{}", .{
+            params.range.start.line,
+            params.range.start.character,
+            params.range.end.line,
+            params.range.end.character,
+        });
+
+        const doc = self.store.get(params.textDocument.uri) orelse {
+            std.log.info("Document not found", .{});
+            return &[_]protocol.InlayHint{};
+        };
+
+        const prog = doc.program orelse return &[_]protocol.InlayHint{};
+        const ctx = doc.ctx orelse return &[_]protocol.InlayHint{};
+
+        const hints = try context_hinter.getInlayHints(
+            params.range,
+            arena,
+            prog,
+            ctx,
+        );
+
+        std.log.info("Returning {} inlay hints", .{hints.len});
+        return hints;
     }
 
     /// Handle textDocument/didClose notification
