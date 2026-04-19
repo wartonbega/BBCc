@@ -392,6 +392,7 @@ pub const funcDef = struct {
     typeparam: ArrayList(TypeParam),
     reference: Parser.Location,
     parent: ?*Type,
+    ctx: ?*analyser.Context = null,
 
     pub fn print(self: *funcDef) void {
         std.debug.print("function '{s}' (", .{self.name});
@@ -435,6 +436,12 @@ pub const structDef = struct {
         while (it.next()) |hab| {
             std.debug.print("\t+ {s} : {s} \n", .{ hab.key_ptr.*, hab.value_ptr.*.toString(arena.allocator()) });
         }
+    }
+
+    pub fn getHabitantIndex(self: *structDef, name: []const u8) usize {
+        return for (self.fields.items, 0..) |field, i| {
+            if (std.mem.eql(u8, field, name)) break i;
+        } else 0;
     }
 };
 

@@ -13,3 +13,14 @@ When allocating an object, the memory is layed out as so:
 +———————————————————+——————————————————+
 ```
 
+# Difference between intrepreted and compiled BBC:
+
+```bbc
+let a = @Object{...}
+let b = a.method
+_ = b(...)
+```
+
+Intrepreted: called method on object a
+Compiled: called method on null ??
+

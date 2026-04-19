@@ -35,6 +35,8 @@ pub const function = struct {
 pub const Context = struct {
     variables: VarHashmap,
     variables_references: std.StringHashMap(position.Location),
+    variable_stack_loc: std.StringHashMap(i64),
+
     trait_map: TraitHashmap,
     typealiases: TypeTraitHashmap, // For declaring <T: Add, Eq, ...> => (a: T, b: Int)
     type_implem: ImplemHashmap, // All the implementations for the types: eg Int => Add(Int), Sub(Int), etc...
@@ -59,6 +61,7 @@ pub const Context = struct {
         self.* = .{
             .variables = vars,
             .variables_references = .init(allocator),
+            .variable_stack_loc = .init(allocator),
             .parent = null,
             .trait_map = types,
             .typealiases = typealiases,
@@ -86,6 +89,7 @@ pub const Context = struct {
         new.* = .{
             .variables = vars,
             .variables_references = .init(allocator),
+            .variable_stack_loc = .init(allocator),
             .parent = self,
             .trait_map = types,
             .typealiases = typealiases,
@@ -210,6 +214,16 @@ pub const Context = struct {
             return parent.getVariable(name);
         }
         return self.variables.get(name).?;
+    }
+
+    pub fn putVariableStackIndex(self: *Context, name: []const u8, idx: i64) !void {
+        try self.variable_stack_loc.put(name, idx);
+    }
+
+    pub fn getVariableStackIndex(self: *Context, name: []const u8) i64 {
+        if (self.variables.contains(name))
+            return self.variable_stack_loc.get(name).?;
+        return self.parent.?.getVariableStackIndex(name);
     }
 
     pub fn extendTraits(self: *Context, name: []const u8, traits: ArrayList(Traits.Trait)) !void {
@@ -704,6 +718,7 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
 
     // We can create a child context for the function
     var ctx = try par_ctx.createChild(allocator);
+    func.ctx = ctx;
 
     // We can set the argument type
     for (func.typeparam.items) |type_param| {

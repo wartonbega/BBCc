@@ -89,6 +89,12 @@ pub fn duplicateWithErrorUnion(allocator: Allocator, base: *ast.Type, err: bool)
     return Type{ .decided = _type };
 }
 
+pub fn isVoid(t: *ast.Type) bool {
+    if (t.base == .name and std.mem.eql(u8, t.base.name, "Void"))
+        return true;
+    return false;
+}
+
 ///////////////////////////////////////////////////
 ///                                             ///
 ///////////////////////////////////////////////////

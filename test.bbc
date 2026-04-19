@@ -1,28 +1,23 @@
+struct Test {
+    Int a,
+    Int b
+}
+
 struct Toto {
     Int a,
-    Int b,
-
-    func test () Toto {
-        
-    }
+    Test b
 }
 
-func test(Bool abcd) String {
-    let b = 2
-    let af = b + abcd
-    "zefzef"
-}
-
+// Fibonnaci recursive
 func fibRec2(Int x) Int {
-    let ret = 
-        if x == 0 0
+    let ret = if x == 0 0
         elif x == 1 1
         else fibRec2(x - 1) + fibRec2(x - 2)
     ret
 }
 
 
-
+// Fibonnaci iterative
 func fib(Int x) Int {
     let a = 0
     let b = 1
@@ -35,9 +30,11 @@ func fib(Int x) Int {
     a
 }
 
-
 func main() Int {
-    println(fibRec2(10))
-    println(fib(10))
-    0
+    let b = @Test{
+        a = 1,
+        b = 2
+    }
+    
+    b.b
 }

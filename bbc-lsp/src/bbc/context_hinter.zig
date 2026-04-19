@@ -44,7 +44,7 @@ fn hintSearchValue(pos: position.Position, allocator: std.mem.Allocator, value: 
         .charLit => return hinterInfo{ .ttype = .{ .literal = "Char" } },
         .identifier => |ident| {
             const name = ident.name;
-            if (ctx.variableExist(name))
+            if (ctx.variableExist(name) and ctx.getVariable(name) == .decided)
                 return hinterInfo{ .ttype = .{ .variable = .{ ._type = ctx.getVariable(name).decided, .name = name } } };
             if (ctx.functionExist(name)) {
                 const _type = analyser.createFunctionSignature(ctx.getFunction(name), allocator) catch {
@@ -57,7 +57,7 @@ fn hintSearchValue(pos: position.Position, allocator: std.mem.Allocator, value: 
             }
         },
         .varDec => |vd| {
-            if (ctx.variableExist(vd.name))
+            if (ctx.variableExist(vd.name) and ctx.getVariable(vd.name) == .decided)
                 return hinterInfo{ .ttype = .{ .variable = .{ ._type = ctx.getVariable(vd.name).decided, .name = vd.name } } };
         },
         .binaryOperator => |binop| {
@@ -118,7 +118,8 @@ fn hintSearchValue(pos: position.Position, allocator: std.mem.Allocator, value: 
             const t = Types.getTypeOfValue(uopr.expr, ctx, allocator) catch {
                 return hinterInfo{ .ttype = .{ .noInfo = {} } };
             };
-            return hinterInfo{ .ttype = .{ .typeName = t.decided } };
+            if (t == .decided)
+                return hinterInfo{ .ttype = .{ .typeName = t.decided } };
         },
         .While => |wl| {
             if (wl.condition.getReference().contains(pos))
@@ -157,6 +158,7 @@ fn hintSearchFuncdef(pos: position.Position, allocator: std.mem.Allocator, funcD
 
     if (funcDef.code.reference.contains(pos))
         return hintSearchScope(pos, allocator, funcDef.code);
+
     return hinterInfo{ .ttype = .{ .func = .{ .sig = ctx.getVariable(funcDef.name).decided, .name = funcDef.name } } };
 }
 
@@ -274,6 +276,8 @@ fn hintGetDefinitionValue(pos: position.Position, allocator: std.mem.Allocator, 
             const t = Types.getTypeOfValue(uopr.expr, ctx, allocator) catch {
                 return null;
             };
+            if (t != .decided)
+                return null;
             if (t.decided.base == .name and ctx.typeDefExist(t.decided.base.name))
                 return ctx.getTypeDef(t.decided.base.name).reference;
         },
@@ -477,6 +481,8 @@ fn collectHintsFromValue(collector: *InlayHintCollector, value: *ast.Value, ctx:
             // Optionally add type hints for variable declarations without explicit types
             if (ctx.variableExist(vardec.name)) {
                 const inferred_type = ctx.getVariable(vardec.name);
+                if (inferred_type == .undecided)
+                    return;
                 const type_str = inferred_type.decided.toString(collector.allocator);
                 const var_end = position.Position{
                     .line = vardec.reference.range.end.line,

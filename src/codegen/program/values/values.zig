@@ -1,0 +1,10 @@
+pub const intlit = @import("intlit.zig");
+pub const boollit = @import("boollit.zig");
+pub const binop = @import("binop.zig");
+pub const assign = @import("assignement.zig");
+pub const vardec = @import("vardec.zig");
+pub const identifier = @import("identifier.zig");
+pub const ifstatement = @import("ifstatement.zig");
+pub const funcall = @import("funcall.zig");
+pub const structinit = @import("structinit.zig");
+pub const unaryoperatorright = @import("unaryOperatorRight.zig");
