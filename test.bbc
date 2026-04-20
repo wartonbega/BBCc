@@ -1,40 +1,42 @@
-struct Test {
+struct Toto {
     Int a,
     Int b
 }
 
-struct Toto {
-    Int a,
-    Test b
+
+trait Stringable(Type) {
+    func toString () String
+
+    func with (Type other) String
 }
 
-// Fibonnaci recursive
-func fibRec2(Int x) Int {
-    let ret = if x == 0 0
-        elif x == 1 1
-        else fibRec2(x - 1) + fibRec2(x - 2)
-    ret
-}
-
-
-// Fibonnaci iterative
-func fib(Int x) Int {
-    let a = 0
-    let b = 1
-    while x > 0 { 
-        let c = a + b
-        b = a
-        a = c
-        x = x - 1
+implement Stringable: Toto {
+    func toString() String {
+        "(a, b)"
     }
-    a
+
+    func with (Toto other) String {
+        "(a, b)(a', b')"
+    }
 }
+
+
+func <Type: Stringable> test (Type x, Type y) Void {
+    println(x.toString())
+    println(x.with(y))
+}
+
 
 func main() Int {
-    let b = @Test{
+    let first = @Toto{
         a = 1,
         b = 2
     }
+
+    let second = @Toto{
+        a = 3,
+        b = 4
+    }
     
-    b.b
+    1
 }

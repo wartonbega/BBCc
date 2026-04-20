@@ -12,5 +12,7 @@ const Compiler = @import("../../compiler.zig").Compiler;
 const codegen = @import("../codegenprog.zig");
 
 pub fn codegenUopRight(uopr: *Ast.UnaryOperatorRight, compiler: *Compiler, cctx: *analyser.Context) !void {
-    
+    _ = uopr;
+    _ = compiler;
+    _ = cctx;
 }

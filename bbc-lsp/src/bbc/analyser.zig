@@ -35,13 +35,21 @@ pub const function = struct {
 pub const Context = struct {
     variables: VarHashmap,
     variables_references: std.StringHashMap(position.Location),
+    variable_stack_loc: std.StringHashMap(i64),
+
     trait_map: TraitHashmap,
     typealiases: TypeTraitHashmap, // For declaring <T: Add, Eq, ...> => (a: T, b: Int)
     type_implem: ImplemHashmap, // All the implementations for the types: eg Int => Add(Int), Sub(Int), etc...
+    type_resolved: std.StringHashMap(Types.Type), // Concrete type bindings for current function version (e.g. T -> Int)
     typedef: std.StringHashMap(*ast.structDef),
     parent: ?*Context,
     functions_to_compile: ArrayList(functionVersion),
     functions: std.hash_map.StringHashMap(*ast.funcDef),
+
+    // User-defined trait system
+    trait_defs: std.StringHashMap(*ast.traitDef),
+    user_trait_impl: std.StringHashMap(ArrayList([]const u8)), // type_name -> [trait_name, ...]
+    user_typealiases: std.StringHashMap(ArrayList([]const u8)), // type_param_name -> [user_trait_name, ...]
 
     // Error handling
     error_locations: std.ArrayList(position.Location),
@@ -59,13 +67,18 @@ pub const Context = struct {
         self.* = .{
             .variables = vars,
             .variables_references = .init(allocator),
+            .variable_stack_loc = .init(allocator),
             .parent = null,
             .trait_map = types,
             .typealiases = typealiases,
             .type_implem = type_implem,
+            .type_resolved = .init(allocator),
             .functions_to_compile = function_to_compile,
             .functions = functions,
             .typedef = typedef,
+            .trait_defs = std.StringHashMap(*ast.traitDef).init(allocator),
+            .user_trait_impl = std.StringHashMap(ArrayList([]const u8)).init(allocator),
+            .user_typealiases = std.StringHashMap(ArrayList([]const u8)).init(allocator),
             .error_locations = .init(allocator),
             .error_messages = .init(allocator),
         };
@@ -86,13 +99,18 @@ pub const Context = struct {
         new.* = .{
             .variables = vars,
             .variables_references = .init(allocator),
+            .variable_stack_loc = .init(allocator),
             .parent = self,
             .trait_map = types,
             .typealiases = typealiases,
             .type_implem = type_implem,
+            .type_resolved = try self.type_resolved.clone(),
             .functions_to_compile = ArrayList(functionVersion).init(allocator),
             .functions = std.hash_map.StringHashMap(*ast.funcDef).init(allocator),
             .typedef = typedef,
+            .trait_defs = try self.trait_defs.clone(),
+            .user_trait_impl = try self.user_trait_impl.clone(),
+            .user_typealiases = try self.user_typealiases.clone(),
             .error_locations = .init(allocator),
             .error_messages = .init(allocator),
         };
@@ -114,8 +132,9 @@ pub const Context = struct {
                 return true;
             if (std.mem.eql(u8, name, "Void"))
                 return true;
-            // It can be both defined as a struct or countained in the type aliases section
-            return self.typedef.contains(name) or self.typealiases.contains(name);
+            // Types registered via inbuilt_types.config are in trait_map
+            if (self.trait_map.contains(name)) return true;
+            return self.typedef.contains(name) or self.typealiases.contains(name) or self.user_typealiases.contains(name);
         } else {
             // TODO: implement recursive checking for function types
             return true; // it is a function type, so it exists for now
@@ -210,6 +229,16 @@ pub const Context = struct {
             return parent.getVariable(name);
         }
         return self.variables.get(name).?;
+    }
+
+    pub fn putVariableStackIndex(self: *Context, name: []const u8, idx: i64) !void {
+        try self.variable_stack_loc.put(name, idx);
+    }
+
+    pub fn getVariableStackIndex(self: *Context, name: []const u8) i64 {
+        if (self.variables.contains(name))
+            return self.variable_stack_loc.get(name).?;
+        return self.parent.?.getVariableStackIndex(name);
     }
 
     pub fn extendTraits(self: *Context, name: []const u8, traits: ArrayList(Traits.Trait)) !void {
@@ -336,7 +365,6 @@ pub fn typeparamContains(typeparam: ArrayList(ast.TypeParam), name: []const u8) 
 
 pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !Types.Type {
     const f_signature = try analyseValue(func.func, ctx, allocator);
-    // returns the return type of the function
     switch (f_signature) {
         .undecided => return f_signature,
         .decided => |t| {
@@ -345,37 +373,60 @@ pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !
                 .function => |functype| {
                     if (func.args.items.len != functype.argtypes.items.len)
                         try ctx.Error("The function expects {d} arguments, but got {d}", .{ functype.argtypes.items.len, func.args.items.len }, func.func.getReference());
-                    // We can build the current function version, which shall have to be compiled later
+
                     var func_version = std.hash_map.StringHashMap(Types.Type).init(allocator);
+
+                    // Phase 1: bind type params from arguments
                     for (func.args.items, functype.argtypes.items) |a, b| {
                         const argtype = try analyseValue(a, ctx, allocator);
+                        const is_type_param = b.*.base == .name and typeparamContains(functype.typeparam, b.base.name);
                         switch (argtype) {
                             .undecided => return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) },
                             .decided => {
-                                // If there's a type alias, then we get to assign it
-                                if (b.*.base == .name and typeparamContains(functype.typeparam, b.base.name)) {
-                                    if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
-                                        try ctx.Error("'{s}' is already set to be type '{s}'", .{
-                                            b.*.base.name,
-                                            func_version.get(b.*.base.name).?.toString(allocator),
-                                        }, a.getReference());
+                                if (is_type_param) {
+                                    if (func_version.contains(b.base.name)) {
+                                        // Already bound: check consistency
+                                        if (!argtype.matchType(func_version.get(b.base.name).?))
+                                            try ctx.Error("Type parameter '{s}' bound to '{s}' but argument has type '{s}'", .{
+                                                b.base.name,
+                                                func_version.get(b.base.name).?.toString(allocator),
+                                                argtype.toString(allocator),
+                                            }, a.getReference());
+                                    } else {
+                                        try func_version.put(b.base.name, argtype);
                                     }
-                                    try func_version.put(b.*.base.name, argtype);
-                                } else if (!argtype.decided.match(b)) {
-                                    try ctx.Error("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, a.getReference());
+                                } else {
+                                    // Resolve b through func_version in case it's already-bound type param
+                                    const expected: *ast.Type = if (b.*.base == .name and func_version.contains(b.base.name))
+                                        func_version.get(b.base.name).?.decided
+                                    else
+                                        b;
+                                    if (!argtype.decided.match(expected))
+                                        try ctx.Error("The argument of type '{s}' doesn't match the expected type '{s}'", .{ argtype.toString(allocator), expected.toString(allocator) }, a.getReference());
                                 }
                             },
                         }
                     }
+
+                    // Phase 2: propagate unresolved type params from the caller's resolved context
+                    for (functype.typeparam.items) |tp| {
+                        if (!func_version.contains(tp.name)) {
+                            if (ctx.type_resolved.contains(tp.name))
+                                try func_version.put(tp.name, ctx.type_resolved.get(tp.name).?);
+                        }
+                    }
+
                     try ctx.addFunctionToCompile(functionVersion{
                         .name = f_signature.decided.base.function.fname,
                         .signature = f_signature.decided.base.function,
                         .version = func_version,
                     });
+
+                    // Resolve return type through func_version
                     const ret_type = t.base.function.retype.base;
                     if (ret_type == .name and typeparamContains(t.base.function.typeparam, ret_type.name)) {
                         if (!func_version.contains(ret_type.name))
-                            try ctx.Error("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, func.func.getReference());
+                            try ctx.Error("Unable to infer type for type parameter '{s}'", .{ret_type.name}, func.func.getReference());
                         return func_version.get(ret_type.name).?;
                     }
                     return Types.Type{ .decided = t.base.function.retype };
@@ -526,6 +577,7 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
             return ctx.getVariable(ident.name);
         },
         .intLit => return try Types.CreateTypeInt(allocator, false),
+        .floatLit => return try Types.CreateTypeFloat(allocator, false),
         .charLit => return try Types.CreateTypeChar(allocator, false),
         .stringLit => return try Types.CreateTypeString(allocator, false),
         .boolLit => return Types.CreateTypeBool(allocator, false),
@@ -695,7 +747,7 @@ pub fn createFunctionSignature(func: *ast.funcDef, allocator: Allocator) !*ast.T
     return functype;
 }
 
-pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocator) !void {
+pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, version: std.StringHashMap(Types.Type), allocator: Allocator) !void {
     // Defining the function's signature type
     const functype = try createFunctionSignature(func, allocator);
 
@@ -704,10 +756,29 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
 
     // We can create a child context for the function
     var ctx = try par_ctx.createChild(allocator);
+    func.ctx = ctx;
 
-    // We can set the argument type
+    // Register trait constraints for type params, separating built-in from user-defined
     for (func.typeparam.items) |type_param| {
-        try ctx.typealiases.put(type_param.name, Traits.traitsFromStrings(type_param.traits, allocator));
+        var builtin_traits = ArrayList(Traits.Trait).init(allocator);
+        var user_trait_names = ArrayList([]const u8).init(allocator);
+        for (type_param.traits.items) |trait_name| {
+            if (Traits.isBuiltinTraitName(trait_name)) {
+                try builtin_traits.append(Traits.traitFromString(trait_name));
+            } else {
+                try user_trait_names.append(trait_name);
+            }
+        }
+        try ctx.typealiases.put(type_param.name, builtin_traits);
+        if (user_trait_names.items.len > 0) {
+            try ctx.user_typealiases.put(type_param.name, user_trait_names);
+        }
+    }
+
+    // Populate concrete type bindings from the resolved version (e.g. T -> Int)
+    var version_it = version.iterator();
+    while (version_it.next()) |kv| {
+        try ctx.type_resolved.put(kv.key_ptr.*, kv.value_ptr.*);
     }
 
     // and add the inbuild info-functions
@@ -724,20 +795,43 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
     if (!ctx.typeExist(func.return_type))
         try ctx.Error("The type '{s}' doesn't exist", .{func.return_type.toString(allocator)}, func.reference);
 
-    // associating variables
+    // associating variables — substitute concrete types for type params
     for (func.arguments.items) |arg| {
         if (!ctx.typeExist(arg._type))
             try ctx.Error("The type '{s}' doesn't exist", .{arg._type.toString(allocator)}, arg.reference);
-        try ctx.createVariable(arg.name, Types.Type{ .decided = arg._type }, arg.reference);
+        const resolved: Types.Type = if (arg._type.base == .name and ctx.type_resolved.contains(arg._type.base.name))
+            ctx.type_resolved.get(arg._type.base.name).?
+        else
+            Types.Type{ .decided = arg._type };
+        try ctx.createVariable(arg.name, resolved, arg.reference);
     }
 
     //    for (func.typeparam.items) |type_param| {
     //        try ctx.typealiases.put(type_param.name, Traits.traitsFromStrings(type_param.traits, allocator));
     //    }
 
+    // Resolve declared return type through concrete type bindings (e.g. Type -> Char)
+    const resolved_ret: Types.Type = if (func.return_type.base == .name and ctx.type_resolved.contains(func.return_type.base.name))
+        ctx.type_resolved.get(func.return_type.base.name).?
+    else
+        Types.Type{ .decided = func.return_type };
+
     std.debug.print("\n#[Analysing {s}]\n", .{try func.getName(allocator)});
-    _ = try analyseScope(func.code, ctx, allocator);
-    try Types.inferTypeScope(func.code, ctx, allocator, Types.Type.init(func.return_type));
+    const actual_ret = try analyseScope(func.code, ctx, allocator);
+
+    // Validate body return type against resolved declared return type
+    if (actual_ret == .decided and resolved_ret == .decided) {
+        const actual_bare = try Types.duplicateWithErrorUnion(allocator, actual_ret.decided, false);
+        const declared_bare = try Types.duplicateWithErrorUnion(allocator, resolved_ret.decided, false);
+        if (!actual_bare.matchType(declared_bare))
+            try ctx.Error("Function '{s}' body evaluates to '{s}' but declared return type is '{s}'", .{
+                func.name,
+                actual_ret.toString(allocator),
+                resolved_ret.toString(allocator),
+            }, func.return_type_ref);
+    }
+
+    try Types.inferTypeScope(func.code, ctx, allocator, resolved_ret);
     var it = func.code.ctx.variables.iterator();
     while (it.next()) |kv| {
         std.debug.print("{s} is {s}\n", .{ kv.key_ptr.*, kv.value_ptr.toString(allocator) });
@@ -745,14 +839,13 @@ pub fn analyseFunction(func: *ast.funcDef, par_ctx: *Context, allocator: Allocat
 }
 
 pub fn verifyFunctionTypeTraits(func: *ast.funcDef, ctx: *Context, allocator: Allocator, f_version: functionVersion) !void {
-    // Verifys that all the types in the current function's version are implementing the right traits
-    // There's an error if one of the types don't respect the traits in play
+    // Check traits inferred from body usage
     var val = ast.Value{ .scope = func.code };
     const t = try Traits.getTypeTraits(&val, ctx, allocator);
     var it_k = t.iterator();
     while (it_k.next()) |e| {
         const arg_type_name = e.key_ptr.*;
-        const arg_type_traits = e.value_ptr.*; // ArrayList(Trait)
+        const arg_type_traits = e.value_ptr.*;
 
         if (!f_version.version.contains(arg_type_name))
             continue;
@@ -764,6 +857,97 @@ pub fn verifyFunctionTypeTraits(func: *ast.funcDef, ctx: *Context, allocator: Al
                 try Traits.traitListToString(arg_type_traits, allocator),
             }, func.reference);
     }
+
+    // Check declared type parameter constraints (e.g. <T: Add, Mul> — verify Mul even if unused in body)
+    for (func.typeparam.items) |tp| {
+        if (!f_version.version.contains(tp.name))
+            continue;
+        const concrete = f_version.version.get(tp.name).?;
+
+        // Check built-in trait constraints
+        var builtin_traits = ArrayList(Traits.Trait).init(allocator);
+        for (tp.traits.items) |trait_name| {
+            if (Traits.isBuiltinTraitName(trait_name))
+                try builtin_traits.append(Traits.traitFromString(trait_name));
+        }
+        if (!Traits.typeMatchTraits(&ctx.trait_map, &ctx.typealiases, concrete, builtin_traits))
+            try ctx.Error("Type '{s}' is bound to '{s}' which doesn't implement the required built-in traits [{s}]", .{
+                tp.name,
+                concrete.toString(allocator),
+                try Traits.traitListToString(builtin_traits, allocator),
+            }, func.reference);
+
+        // Check user-defined trait constraints
+        if (concrete != .decided) continue;
+        const concrete_name = concrete.decided.base.name;
+        for (tp.traits.items) |trait_name| {
+            if (Traits.isBuiltinTraitName(trait_name)) continue;
+            const has_impl = if (ctx.user_trait_impl.get(concrete_name)) |impls| blk: {
+                for (impls.items) |impl_name| {
+                    if (std.mem.eql(u8, impl_name, trait_name)) break :blk true;
+                }
+                break :blk false;
+            } else false;
+            if (!has_impl)
+                try ctx.Error("Type '{s}' doesn't implement trait '{s}'", .{ concrete_name, trait_name }, func.reference);
+        }
+    }
+}
+
+pub fn analyseTraitDef(trait: *ast.traitDef, ctx: *Context) !void {
+    try ctx.trait_defs.put(trait.name, trait);
+}
+
+pub fn analyseTraitImpl(impl: *ast.traitImpl, ctx: *Context, allocator: Allocator) !void {
+    if (!ctx.trait_defs.contains(impl.trait_name))
+        try ctx.Error("Unknown trait '{s}'", .{impl.trait_name}, impl.reference);
+
+    const trait_def = ctx.trait_defs.get(impl.trait_name).?;
+
+    if (!ctx.typeDefExist(impl.type_name))
+        try ctx.Error("Unknown type '{s}' in implement", .{impl.type_name}, impl.reference);
+
+    const struct_def = ctx.getTypeDef(impl.type_name);
+
+    // Verify all required trait methods are provided
+    var method_it = trait_def.methods.iterator();
+    while (method_it.next()) |entry| {
+        const required_name = entry.key_ptr.*;
+        var found = false;
+        for (impl.methods.items) |method| {
+            if (std.mem.eql(u8, method.name, required_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            try ctx.Error("Missing implementation of method '{s}' required by trait '{s}'", .{ required_name, impl.trait_name }, impl.reference);
+    }
+
+    // Register each method on the struct and as a named function
+    for (impl.methods.items) |method| {
+        const method_sig = try createFunctionSignature(method, allocator);
+        if (!struct_def.habitants.contains(method.name)) {
+            try struct_def.habitants.put(method.name, method_sig);
+            try struct_def.fields.append(method.name);
+        }
+        if (!struct_def.methods.contains(method.name)) {
+            try struct_def.methods.put(method.name, method);
+        }
+        const full_name = try method.getName(allocator);
+        try ctx.setFunction(full_name, method);
+        try ctx.addFunctionToCompile(functionVersion{
+            .name = full_name,
+            .signature = method_sig.base.function,
+            .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
+        });
+    }
+
+    // Record that type_name implements trait_name
+    if (!ctx.user_trait_impl.contains(impl.type_name)) {
+        try ctx.user_trait_impl.put(impl.type_name, ArrayList([]const u8).init(allocator));
+    }
+    try ctx.user_trait_impl.getPtr(impl.type_name).?.append(impl.trait_name);
 }
 
 fn containFunction(func: functionVersion, list: ArrayList(functionVersion)) bool {
@@ -846,7 +1030,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     try ctx.addTypeDef("String", string_type_def);
 
     try Traits.initBasicTraits(ctx, allocator);
-    // First pass : search all the function definition
+    // First pass: register all top-level function definitions
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
             .FuncDef => |func| {
@@ -854,7 +1038,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
                     try ctx.Error("Can't shadow the definition of function '{s}' previously defined here: {s}", .{ inst.FuncDef.name, ctx.getFunction(inst.FuncDef.name).reference.toString() }, inst.FuncDef.reference);
                 try ctx.setFunction(func.name, func);
             },
-            else => {},
+            .TraitDef, .TraitImpl, .StructDef => {},
         }
     }
 
@@ -865,16 +1049,41 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
     });
 
-    // Second pass, find all the struct definitions
+    // Second pass: register struct definitions
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
             .StructDef => |stct| {
                 try analyseStructDef(stct, ctx, allocator);
             },
+            .FuncDef, .TraitDef, .TraitImpl => {},
+        }
+    }
+
+    // Third pass: register trait definitions
+    for (prog.instructions.items) |inst| {
+        switch (inst.*) {
+            .TraitDef => |trait| {
+                try analyseTraitDef(trait, ctx);
+            },
             else => {},
         }
     }
+
     var code_has_errors = false;
+
+    // Fourth pass: register trait implementations
+    for (prog.instructions.items) |inst| {
+        switch (inst.*) {
+            .TraitImpl => |impl| {
+                analyseTraitImpl(impl, ctx, allocator) catch |err| {
+                    if (err == errors.bbcErrors.bbcContextualError) {
+                        code_has_errors = true;
+                    } else return err;
+                };
+            },
+            else => {},
+        }
+    }
     // we can analyse the main function
     //try analyseFunction(ctx.getFunction("main"), ctx, allocator);
     while (ctx.functions_to_compile.items.len != 0) {
@@ -884,7 +1093,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         const func_def = ctx.getFunction(func.name);
 
         if (!containFunction(func, funcs_to_compile)) {
-            analyseFunction(func_def, ctx, allocator) catch |err| {
+            analyseFunction(func_def, ctx, func.version, allocator) catch |err| {
                 if (err == errors.bbcErrors.bbcContextualError) {
                     code_has_errors = true;
                 } else {

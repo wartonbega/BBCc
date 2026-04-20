@@ -67,9 +67,12 @@ pub const TokenType = enum {
     PRINT,
     PRINTLN,
     IMPORT,
+    TRAIT,
+    IMPLEMENT,
 
     IDENT, // identifier
     INTLIT, // Integer literal
+    FLOATLIT, // Float literal
     CHARLIT,
     STRINGLIT,
     TRUE, // Boolean literal
@@ -120,8 +123,11 @@ pub const TokenType = enum {
             .PRINT => "print",
             .PRINTLN => "println",
             .IMPORT => "import",
+            .TRAIT => "trait",
+            .IMPLEMENT => "implement",
             .IDENT => "identifier",
             .INTLIT => "Int literal",
+            .FLOATLIT => "Float literal",
             .CHARLIT => "Char literal",
             .STRINGLIT => "String literal",
             .TRUE => "true",
@@ -191,6 +197,12 @@ fn getIdentType(ident: []const u8) TokenType {
     }
     if (std.mem.eql(u8, ident, "import")) {
         return TokenType.IMPORT;
+    }
+    if (std.mem.eql(u8, ident, "trait")) {
+        return TokenType.TRAIT;
+    }
+    if (std.mem.eql(u8, ident, "implement")) {
+        return TokenType.IMPLEMENT;
     }
     return TokenType.IDENT;
 }
@@ -355,6 +367,17 @@ fn parseIntegerLiteral(reader: *Reader, allocator: std.mem.Allocator) !Token {
     if (pos == 100) {
         return parser_error.IntegerLiteralTooLong;
     }
+    // Detect float: digits followed by '.' then more digits
+    if (reader.canPeek(2) and reader.peek(1)[0] == '.' and isNumeric(reader.peek(2)[1])) {
+        buffer[pos] = reader.consume(1)[0]; // consume '.'
+        pos += 1;
+        while (pos < 100 and reader.canPeek(1) and isNumeric(reader.peek(1)[0])) {
+            buffer[pos] = reader.consume(1)[0];
+            pos += 1;
+        }
+        if (pos == 100) return parser_error.IntegerLiteralTooLong;
+        return .{ .type = TokenType.FLOATLIT, .value = buffer[0..pos], .location = reader.getCurrentLocation() };
+    }
     const value = buffer[0..pos];
     return .{ .type = TokenType.INTLIT, .value = value, .location = reader.getCurrentLocation() };
 }
@@ -385,13 +408,11 @@ fn parseChar(reader: *Reader) !Token {
 fn parseString(reader: *Reader) !Token {
     _ = reader.consume(1);
     var i: u32 = @intCast(1);
-    while (reader.canPeek(i) and reader.peek(i)[reader.peek(i).len - 1] != '"') {
+    while (reader.peek(i)[reader.peek(i).len - 1] != '"') {
         i += 1;
     }
     const ret = reader.consume(i - 1);
-    const closing = reader.consume(1)[0];
-    if (closing != '"')
-        return parser_error.UnexpectedToken;
+    _ = reader.consume(1);
     return .{ .type = TokenType.STRINGLIT, .value = ret, .location = reader.getCurrentLocation() };
 }
 

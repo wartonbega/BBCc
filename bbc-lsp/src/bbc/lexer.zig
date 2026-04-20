@@ -86,6 +86,13 @@ pub const tokenReader = struct {
     pub fn canPeek(self: *tokenReader) bool {
         return self.pos < self.tokens.items.len;
     }
+
+    pub fn peekAt(self: *tokenReader, offset: usize) ?parser.Token {
+        const idx = @as(usize, @intCast(self.pos)) + offset;
+        if (idx < self.tokens.items.len)
+            return self.tokens.items[idx];
+        return null;
+    }
 };
 
 pub fn lexeType(reader: *tokenReader, allocator: Allocator) !*ast.Type {
@@ -276,6 +283,15 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator
             const ret = try allocator.create(ast.Value);
             ret.* = ast.Value{ .intLit = .{
                 .value = try std.fmt.parseInt(i32, value.value, 10),
+                .reference = value.location,
+            } };
+            return ret;
+        },
+        TokenType.FLOATLIT => {
+            const value = (try reader.consume(TokenType.FLOATLIT));
+            const ret = try allocator.create(ast.Value);
+            ret.* = ast.Value{ .floatLit = .{
+                .value = try std.fmt.parseFloat(f64, value.value),
                 .reference = value.location,
             } };
             return ret;
@@ -638,6 +654,8 @@ pub fn lexeTypeParametrisation(reader: *tokenReader, allocator: Allocator) !Arra
     if (!reader.canPeek() or (try reader.peek()).type != .LESS_THAN)
         return ret;
 
+    _ = try reader.consume(.LESS_THAN);
+
     while (true) {
         const name = (try reader.consume(.IDENT));
         if (reader.canPeek() and (try reader.peek()).type == .COLON) {
@@ -659,6 +677,18 @@ pub fn lexeTypeParametrisation(reader: *tokenReader, allocator: Allocator) !Arra
             } else {
                 const trait = (try reader.consume(.IDENT));
                 try traits.append(trait.value);
+                // Continue reading more traits: stop when next is not `,` or when
+                // the token after the comma is `IDENT COLON` (= a new type param).
+                while (reader.canPeek() and (try reader.peek()).type == .COMMA) {
+                    const after_comma = reader.peekAt(1);
+                    if (after_comma == null) break;
+                    // If the token after the comma is an IDENT followed by `:`, it's a new type param.
+                    const after_ident = reader.peekAt(2);
+                    if (after_ident != null and after_ident.?.type == .COLON) break;
+                    _ = (try reader.consume(.COMMA));
+                    const extra_trait = (try reader.consume(.IDENT));
+                    try traits.append(extra_trait.value);
+                }
             }
             try ret.append(.{
                 .name = name.value,
@@ -677,6 +707,8 @@ pub fn lexeTypeParametrisation(reader: *tokenReader, allocator: Allocator) !Arra
             break;
         } else _ = (try reader.consume(.COMMA));
     }
+
+    _ = try reader.consume(.MORE_THAN);
 
     return ret;
 }
@@ -773,6 +805,72 @@ pub fn lexeStructDef(reader: *tokenReader, allocator: Allocator) !*ast.structDef
     return ret;
 }
 
+pub fn lexeTraitMethodSig(reader: *tokenReader, allocator: Allocator) !ast.TraitMethodSig {
+    const fn_kwd = try reader.consume(.FN_DEC);
+    const name_tok = try reader.consume(.IDENT);
+    const args = try lexeArguments(reader, allocator);
+    const ret_tuple = try lexeTypeWithLocation(reader, allocator);
+    return ast.TraitMethodSig{
+        .name = name_tok.value,
+        .arguments = args,
+        .return_type = ret_tuple.t,
+        .reference = fn_kwd.location.unionWith(ret_tuple.loc),
+    };
+}
+
+pub fn lexeTraitDef(reader: *tokenReader, allocator: Allocator) !*ast.traitDef {
+    const trait_kwd = try reader.consume(.TRAIT);
+    const name = (try reader.consume(.IDENT)).value;
+    _ = try reader.consume(.O_PAR);
+    const type_param = (try reader.consume(.IDENT)).value;
+    _ = try reader.consume(.C_PAR);
+    _ = try reader.consume(.O_CUR);
+
+    var methods = std.StringHashMap(ast.TraitMethodSig).init(allocator);
+    while (reader.canPeek() and (try reader.peek()).type != .C_CUR) {
+        const sig = try lexeTraitMethodSig(reader, allocator);
+        try methods.put(sig.name, sig);
+    }
+
+    const ccur = try reader.consume(.C_CUR);
+    const ret = try allocator.create(ast.traitDef);
+    ret.* = .{
+        .name = name,
+        .type_param = type_param,
+        .methods = methods,
+        .reference = trait_kwd.location.unionWith(ccur.location),
+    };
+    return ret;
+}
+
+pub fn lexeTraitImpl(reader: *tokenReader, allocator: Allocator) !*ast.traitImpl {
+    const impl_kwd = try reader.consume(.IMPLEMENT);
+    const trait_name = (try reader.consume(.IDENT)).value;
+    _ = try reader.consume(.COLON);
+    const type_name = (try reader.consume(.IDENT)).value;
+    _ = try reader.consume(.O_CUR);
+
+    const stc_type = try allocator.create(ast.Type);
+    stc_type.* = .{ .base = .{ .name = type_name }, .err = false, .references = 0 };
+
+    var methods = ArrayList(*ast.funcDef).init(allocator);
+    while (reader.canPeek() and (try reader.peek()).type != .C_CUR) {
+        var method = try lexeFuncdef(reader, allocator);
+        method.parent = stc_type;
+        try methods.append(method);
+    }
+
+    const ccur = try reader.consume(.C_CUR);
+    const ret = try allocator.create(ast.traitImpl);
+    ret.* = .{
+        .trait_name = trait_name,
+        .type_name = type_name,
+        .methods = methods,
+        .reference = impl_kwd.location.unionWith(ccur.location),
+    };
+    return ret;
+}
+
 pub fn lexeProgram(tokens: ArrayList(parser.Token), allocator: Allocator, uri: []const u8) !*ast.Program {
     // Program:
     //   | FUNC name ( args* ) retype {code}
@@ -791,6 +889,16 @@ pub fn lexeProgram(tokens: ArrayList(parser.Token), allocator: Allocator, uri: [
                 const structdef = try allocator.create(ast.ProgInstructions);
                 structdef.* = ast.ProgInstructions{ .StructDef = try lexeStructDef(&reader, allocator) };
                 try ret.instructions.append(structdef);
+            },
+            TokenType.TRAIT => {
+                const traitdef = try allocator.create(ast.ProgInstructions);
+                traitdef.* = ast.ProgInstructions{ .TraitDef = try lexeTraitDef(&reader, allocator) };
+                try ret.instructions.append(traitdef);
+            },
+            TokenType.IMPLEMENT => {
+                const traitimpl = try allocator.create(ast.ProgInstructions);
+                traitimpl.* = ast.ProgInstructions{ .TraitImpl = try lexeTraitImpl(&reader, allocator) };
+                try ret.instructions.append(traitimpl);
             },
             // TokenType.IMPORT => {
             //     // Preprocessor inst => just copies the imported files' code here
@@ -826,6 +934,16 @@ pub fn lexeProgramWithReader(reader: *tokenReader, allocator: Allocator) !*ast.P
                 const structdef = try allocator.create(ast.ProgInstructions);
                 structdef.* = ast.ProgInstructions{ .StructDef = try lexeStructDef(reader, allocator) };
                 try ret.instructions.append(structdef);
+            },
+            TokenType.TRAIT => {
+                const traitdef = try allocator.create(ast.ProgInstructions);
+                traitdef.* = ast.ProgInstructions{ .TraitDef = try lexeTraitDef(reader, allocator) };
+                try ret.instructions.append(traitdef);
+            },
+            TokenType.IMPLEMENT => {
+                const traitimpl = try allocator.create(ast.ProgInstructions);
+                traitimpl.* = ast.ProgInstructions{ .TraitImpl = try lexeTraitImpl(reader, allocator) };
+                try ret.instructions.append(traitimpl);
             },
             else => {
                 try lexerError("Unexpected token {s}", .{token.type.toString()}, token.location, reader);

@@ -18,6 +18,8 @@ pub const Trait = enum {
     LeEq,
     Le,
     Gr,
+    And,
+    Or,
 
     Display,
 
@@ -55,193 +57,98 @@ pub fn createTraitWithBinOperators(type_implems: *ArrayList(analyser.funcPair), 
     }
 }
 
+const inbuilt_config = @embedFile("inbuilt_types.config");
+
 pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !void {
-    // Create the Int type
-    const int_type = try Types.CreateTypeInt(allocator, false);
-    const int_type_err = try Types.CreateTypeInt(allocator, true);
-    const bool_type = try Types.CreateTypeBool(allocator, false);
-    const char_type = try Types.CreateTypeChar(allocator, false);
-    const string_type = try Types.CreateTypeString(allocator, false);
-    const void_type = try Types.CreateTypeVoid(allocator, false);
+    var type_cache = std.StringHashMap(*ast.Type).init(allocator);
 
-    // +————————————————————————————————+
-    // |   INT TRAITS AND OPERATION     |
-    // +————————————————————————————————+
+    var current_type: ?[]const u8 = null;
 
-    var int_traits = ArrayList(Trait).init(allocator);
-    try int_traits.append(Trait.Add);
-    try int_traits.append(Trait.Sub);
-    try int_traits.append(Trait.Mult);
-    try int_traits.append(Trait.Div);
-    try int_traits.append(Trait.Mod);
-    try int_traits.append(Trait.Eq);
-    try int_traits.append(Trait.GrEq);
-    try int_traits.append(Trait.LeEq);
-    try int_traits.append(Trait.Le);
-    try int_traits.append(Trait.Gr);
+    var lines = std.mem.splitScalar(u8, inbuilt_config, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
 
-    try ctx.trait_map.put("Int", int_traits);
+        // Type header: "TypeName:" (no spaces)
+        if (std.mem.endsWith(u8, line, ":") and std.mem.indexOf(u8, line, " ") == null) {
+            current_type = line[0 .. line.len - 1];
+            if (!ctx.trait_map.contains(current_type.?)) {
+                try ctx.trait_map.put(current_type.?, ArrayList(Trait).init(allocator));
+                try ctx.type_implem.put(current_type.?, ArrayList(analyser.funcPair).init(allocator));
+            }
+            continue;
+        }
 
-    var int_implems = ArrayList(analyser.funcPair).init(allocator);
+        if (current_type == null) continue;
 
-    // Implementing int + int -> int
-    try createTraitWithBinOperators(
-        &int_implems,
-        int_type.decided,
-        int_type.decided,
-        &[_]ast.binOperator{ .Plus, .Minus, .Times, .Modulus },
-        allocator,
-    );
+        // "op1 op2 ... : RhsType1 RhsType2 ... -> ReturnType"
+        const colon_pos = std.mem.indexOf(u8, line, " : ") orelse continue;
+        const ops_str = std.mem.trim(u8, line[0..colon_pos], " \t");
+        const after_colon = std.mem.trim(u8, line[colon_pos + 3 ..], " \t");
 
-    // Implementing int / int -> !int
-    try createTraitWithBinOperator(
-        &int_implems,
-        int_type.decided,
-        int_type_err.decided,
-        .Div,
-        allocator,
-    );
+        const arrow_pos = std.mem.indexOf(u8, after_colon, "->") orelse continue;
+        const rhs_str = std.mem.trim(u8, after_colon[0..arrow_pos], " \t");
+        const ret_str = std.mem.trim(u8, after_colon[arrow_pos + 2 ..], " \t");
 
-    // int + bool -> int
-    try createTraitWithBinOperators(
-        &int_implems,
-        bool_type.decided,
-        int_type.decided,
-        &[_]ast.binOperator{ .Plus, .Minus },
-        allocator,
-    );
+        const is_err = ret_str.len > 0 and ret_str[0] == '!';
+        const ret_name = if (is_err) ret_str[1..] else ret_str;
+        const ret_type = try configGetOrCreateType(&type_cache, ret_name, is_err, allocator);
 
-    // int + char -> int
-    try createTraitWithBinOperators(
-        &int_implems,
-        char_type.decided,
-        int_type.decided,
-        &[_]ast.binOperator{ .Plus, .Minus },
-        allocator,
-    );
+        var ops = ArrayList(ast.binOperator).init(allocator);
+        defer ops.deinit();
+        var ops_iter = std.mem.splitScalar(u8, ops_str, ' ');
+        while (ops_iter.next()) |tok| {
+            const trimmed = std.mem.trim(u8, tok, " \t");
+            if (trimmed.len == 0) continue;
+            const op = configStringToOperator(trimmed) orelse continue;
+            try ops.append(op);
+            const trait = traitFromOperator(op);
+            const t_traits = ctx.trait_map.getPtr(current_type.?).?;
+            var already = false;
+            for (t_traits.items) |tr| {
+                if (tr == trait) { already = true; break; }
+            }
+            if (!already) try t_traits.append(trait);
+        }
 
-    // int == int -> bool
-    try createTraitWithBinOperators(
-        &int_implems,
-        int_type.decided,
-        bool_type.decided,
-        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
-        allocator,
-    );
+        var rhs_iter = std.mem.splitScalar(u8, rhs_str, ' ');
+        while (rhs_iter.next()) |tok| {
+            const trimmed = std.mem.trim(u8, tok, " \t");
+            if (trimmed.len == 0) continue;
+            const rhs_type = try configGetOrCreateType(&type_cache, trimmed, false, allocator);
+            const t_implems = ctx.type_implem.getPtr(current_type.?).?;
+            for (ops.items) |op| {
+                try createTraitWithBinOperator(t_implems, rhs_type, ret_type, op, allocator);
+            }
+        }
+    }
+}
 
-    // int == char -> bool
-    try createTraitWithBinOperators(
-        &int_implems,
-        char_type.decided,
-        bool_type.decided,
-        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
-        allocator,
-    );
+fn configGetOrCreateType(cache: *std.StringHashMap(*ast.Type), name: []const u8, err: bool, allocator: std.mem.Allocator) !*ast.Type {
+    var key_buf: [128]u8 = undefined;
+    const key: []const u8 = if (err) try std.fmt.bufPrint(&key_buf, "!{s}", .{name}) else name;
+    if (cache.get(key)) |existing| return existing;
+    const t = try allocator.create(ast.Type);
+    t.* = .{ .base = .{ .name = name }, .err = err, .references = 0 };
+    try cache.put(try allocator.dupe(u8, key), t);
+    return t;
+}
 
-    // int == void -> bool
-    try createTraitWithBinOperators(
-        &int_implems,
-        void_type.decided,
-        bool_type.decided,
-        &[_]ast.binOperator{ .Equal, .NotEqual },
-        allocator,
-    );
-
-    try ctx.type_implem.put(
-        "Int",
-        int_implems,
-    );
-
-    // +—————————————————————————————————+
-    // |   CHAR TRAITS AND OPERATION     |
-    // +—————————————————————————————————+
-    var char_traits = ArrayList(Trait).init(allocator);
-    try char_traits.append(Trait.Add);
-    try char_traits.append(Trait.Sub);
-    try char_traits.append(Trait.Eq);
-    try char_traits.append(Trait.GrEq);
-    try char_traits.append(Trait.LeEq);
-    try char_traits.append(Trait.Le);
-    try char_traits.append(Trait.Gr);
-
-    try ctx.trait_map.put("Char", char_traits);
-
-    var char_implems = ArrayList(analyser.funcPair).init(allocator);
-
-    // Char + char -> char
-    try createTraitWithBinOperators(
-        &char_implems,
-        char_type.decided,
-        char_type.decided,
-        &[_]ast.binOperator{ .Plus, .Minus },
-        allocator,
-    );
-
-    // Char + int -> char
-    try createTraitWithBinOperators(
-        &char_implems,
-        int_type.decided,
-        char_type.decided,
-        &[_]ast.binOperator{ .Plus, .Minus },
-        allocator,
-    );
-
-    // char == char -> bool
-    try createTraitWithBinOperators(
-        &char_implems,
-        char_type.decided,
-        bool_type.decided,
-        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
-        allocator,
-    );
-
-    // char == int -> bool
-    try createTraitWithBinOperators(
-        &char_implems,
-        int_type.decided,
-        bool_type.decided,
-        &[_]ast.binOperator{ .Equal, .NotEqual, .Ge, .Le, .Gt, .Lt },
-        allocator,
-    );
-
-    try ctx.type_implem.put(
-        "Char",
-        char_implems,
-    );
-
-    // +———————————————————————————————————+
-    // |   STRING TRAITS AND OPERATION     |
-    // +———————————————————————————————————+
-    var string_traits = ArrayList(Trait).init(allocator);
-    try string_traits.append(Trait.Add);
-    try string_traits.append(Trait.Eq);
-
-    try ctx.trait_map.put("String", string_traits);
-
-    var string_implems = ArrayList(analyser.funcPair).init(allocator);
-
-    // String + char -> String
-    try createTraitWithBinOperators(
-        &string_implems,
-        char_type.decided,
-        string_type.decided,
-        &[_]ast.binOperator{.Plus},
-        allocator,
-    );
-
-    // string == string -> bool
-    try createTraitWithBinOperators(
-        &string_implems,
-        string_type.decided,
-        bool_type.decided,
-        &[_]ast.binOperator{ .Equal, .NotEqual },
-        allocator,
-    );
-
-    try ctx.type_implem.put(
-        "String",
-        string_implems,
-    );
+fn configStringToOperator(s: []const u8) ?ast.binOperator {
+    if (std.mem.eql(u8, s, "+")) return .Plus;
+    if (std.mem.eql(u8, s, "-")) return .Minus;
+    if (std.mem.eql(u8, s, "*")) return .Times;
+    if (std.mem.eql(u8, s, "/")) return .Div;
+    if (std.mem.eql(u8, s, "%")) return .Modulus;
+    if (std.mem.eql(u8, s, "==")) return .Equal;
+    if (std.mem.eql(u8, s, "!=")) return .NotEqual;
+    if (std.mem.eql(u8, s, ">")) return .Gt;
+    if (std.mem.eql(u8, s, "<")) return .Lt;
+    if (std.mem.eql(u8, s, ">=")) return .Ge;
+    if (std.mem.eql(u8, s, "<=")) return .Le;
+    if (std.mem.eql(u8, s, "and") or std.mem.eql(u8, s, "&&")) return .And;
+    if (std.mem.eql(u8, s, "or") or std.mem.eql(u8, s, "||")) return .Or;
+    return null;
 }
 
 pub fn typeMatchTrait(trait_map: *TraitHashmap, typealiases: *TypeTraitHashmap, typ: Types.Type, trait: Trait) bool {
@@ -295,20 +202,20 @@ pub fn typeMatchTraits(trait_map: *TraitHashmap, typealiases: *TypeTraitHashmap,
 }
 
 pub fn traitFromOperator(op: ast.binOperator) Trait {
-    switch (op) {
-        .Plus => return Trait.Add,
-        .Equal => return Trait.Eq,
-        .Minus => return Trait.Sub,
-        .Times => return Trait.Mult,
-        .Div => return Trait.Div,
-        .Modulus => return Trait.Mod,
-        .NotEqual => return Trait.Eq,
-        .Ge => return Trait.GrEq,
-        .Le => return Trait.LeEq,
-        .Lt => return Trait.Le,
-        .Gt => return Trait.Gr,
-        else => unreachable,
-    }
+    return switch (op) {
+        .Plus => .Add,
+        .Minus => .Sub,
+        .Times => .Mult,
+        .Div => .Div,
+        .Modulus => .Mod,
+        .Equal, .NotEqual => .Eq,
+        .Ge => .GrEq,
+        .Le => .LeEq,
+        .Lt => .Le,
+        .Gt => .Gr,
+        .And => .And,
+        .Or => .Or,
+    };
 }
 
 pub fn traitFromString(t: []const u8) Trait {
@@ -322,25 +229,29 @@ pub fn traitFromString(t: []const u8) Trait {
     if (std.mem.eql(u8, t, "LeEq")) return Trait.LeEq;
     if (std.mem.eql(u8, t, "Le")) return Trait.Le;
     if (std.mem.eql(u8, t, "Gr")) return Trait.Gr;
+    if (std.mem.eql(u8, t, "And")) return Trait.And;
+    if (std.mem.eql(u8, t, "Or")) return Trait.Or;
     if (std.mem.eql(u8, t, "Display")) return Trait.Display;
     std.debug.panic("Unknown trait string: {s}", .{t});
 }
 
 pub fn stringFromTrait(t: Trait) []const u8 {
-    switch (t) {
-        .Add => return "Add",
-        .Sub => return "Sub",
-        .Mult => return "Mult",
-        .Div => return "Div",
-        .Mod => return "Mod",
-        .Eq => return "Eq",
-        .GrEq => return "GrEq",
-        .LeEq => return "LeEq",
-        .Le => return "Le",
-        .Gr => return "Gr",
-        .Display => return "Display",
-        .PointAccession => return "PointAccession",
-    }
+    return switch (t) {
+        .Add => "Add",
+        .Sub => "Sub",
+        .Mult => "Mult",
+        .Div => "Div",
+        .Mod => "Mod",
+        .Eq => "Eq",
+        .GrEq => "GrEq",
+        .LeEq => "LeEq",
+        .Le => "Le",
+        .Gr => "Gr",
+        .And => "And",
+        .Or => "Or",
+        .Display => "Display",
+        .PointAccession => "PointAccession",
+    };
 }
 
 pub fn traitsFromStrings(t: ArrayList([]const u8), allocator: std.mem.Allocator) ArrayList(Trait) {
@@ -355,12 +266,20 @@ pub fn defaultReturnType(t: Trait, param: Types.Type, alloc: std.mem.Allocator) 
     // Return the default return type of a trait, used on type 'param'
     // for example (here, '.' representes any type), with type T, (T + .) should return T,
     // but (T == .) should return Bool
-    switch (t) {
-        .Add, .Sub, .Mult, .Div, .Mod => return param,
-        .Eq, .Gr, .GrEq, .Le, .LeEq => return try Types.CreateTypeBool(alloc, false),
-        .Display => return try Types.CreateTypeString(alloc, false),
-        .PointAccession => return try Types.CreateTypeInt(alloc, false),
+    return switch (t) {
+        .Add, .Sub, .Mult, .Div, .Mod, .And, .Or => param,
+        .Eq, .Gr, .GrEq, .Le, .LeEq => try Types.CreateTypeBool(alloc, false),
+        .Display => try Types.CreateTypeString(alloc, false),
+        .PointAccession => try Types.CreateTypeInt(alloc, false),
+    };
+}
+
+pub fn isBuiltinTraitName(name: []const u8) bool {
+    const builtin = [_][]const u8{ "Add", "Sub", "Mult", "Div", "Mod", "Eq", "GrEq", "LeEq", "Le", "Gr", "And", "Or", "Display" };
+    for (builtin) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
     }
+    return false;
 }
 
 pub fn traitListToString(traits: ArrayList(Trait), allocator: std.mem.Allocator) ![]const u8 {
@@ -402,6 +321,7 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
     switch (instruction.*) {
         .charLit => {},
         .intLit => {},
+        .floatLit => {},
         .stringLit => {},
         .identifier => {},
         .varDec => {},

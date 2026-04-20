@@ -83,6 +83,7 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
         //.assignement => |assign| {},
         //.binaryOperator => |binop| {},
         .intLit => |i| return Value{ .Int = i.value },
+        .floatLit => |f| return Value{ .Float = f.value },
         .boolLit => |b| return Value{ .Bool = b.value },
         .charLit => |c| return Value{ .Char = c.value },
         .stringLit => |s| {

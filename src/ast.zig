@@ -248,6 +248,10 @@ pub const Value = union(enum) {
         value: i32,
         reference: Parser.Location,
     },
+    floatLit: struct {
+        value: f64,
+        reference: Parser.Location,
+    },
     boolLit: struct {
         value: bool,
         reference: Parser.Location,
@@ -319,6 +323,7 @@ pub const Value = union(enum) {
     pub fn getReference(self: *Value) parser.Location {
         return switch (self.*) {
             .intLit => |value| value.reference,
+            .floatLit => |value| value.reference,
             .charLit => |value| value.reference,
             .boolLit => |value| value.reference,
             .stringLit => |value| value.reference,
@@ -445,14 +450,39 @@ pub const structDef = struct {
     }
 };
 
+pub const TraitMethodSig = struct {
+    name: []const u8,
+    arguments: ArrayList(*Arguments),
+    return_type: *Type,
+    reference: Parser.Location,
+};
+
+pub const traitDef = struct {
+    name: []const u8,
+    type_param: []const u8,
+    methods: std.StringHashMap(TraitMethodSig),
+    reference: Parser.Location,
+};
+
+pub const traitImpl = struct {
+    trait_name: []const u8,
+    type_name: []const u8,
+    methods: ArrayList(*funcDef),
+    reference: Parser.Location,
+};
+
 pub const ProgInstructions = union(enum) {
     FuncDef: *funcDef,
     StructDef: *structDef,
+    TraitDef: *traitDef,
+    TraitImpl: *traitImpl,
 
     pub fn print(self: *ProgInstructions) void {
         switch (self.*) {
             .FuncDef => self.FuncDef.print(),
             .StructDef => self.StructDef.print(),
+            .TraitDef => |td| std.debug.print("TraitDef {s}\n", .{td.name}),
+            .TraitImpl => |ti| std.debug.print("TraitImpl {s}: {s}\n", .{ ti.trait_name, ti.type_name }),
         }
     }
 };

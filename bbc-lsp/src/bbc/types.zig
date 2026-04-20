@@ -76,6 +76,12 @@ pub fn CreateTypeBool(allocator: Allocator, err: bool) !Type {
     return Type{ .decided = _type };
 }
 
+pub fn CreateTypeFloat(allocator: Allocator, err: bool) !Type {
+    const _type = try allocator.create(ast.Type);
+    _type.* = ast.Type{ .base = ast.TypeBase{ .name = "Float" }, .err = err, .references = @intCast(0) };
+    return Type{ .decided = _type };
+}
+
 pub fn CreateTypeVoid(allocator: Allocator, err: bool) !Type {
     const _type = try allocator.create(ast.Type);
     _type.* = ast.Type{ .base = ast.TypeBase{ .name = "Void" }, .err = err, .references = @intCast(0) };
@@ -87,6 +93,12 @@ pub fn duplicateWithErrorUnion(allocator: Allocator, base: *ast.Type, err: bool)
     _type.* = base.*;
     _type.err = err;
     return Type{ .decided = _type };
+}
+
+pub fn isVoid(t: *ast.Type) bool {
+    if (t.base == .name and std.mem.eql(u8, t.base.name, "Void"))
+        return true;
+    return false;
 }
 
 ///////////////////////////////////////////////////
@@ -103,14 +115,16 @@ pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Conte
             switch (argtype) {
                 .undecided => try ctx.Error("Unable to determine the type of the argument", .{}, a.getReference()),
                 .decided => {
-                    // If there's a type alias, then we get to assign it
                     if (func_version.contains(b.*.base.name) and func_version.get(b.*.base.name).? == .decided) {
-                        try ctx.Error("'{s}' is already set to be type '{s}'", .{
-                            b.*.base.name,
-                            func_version.get(b.*.base.name).?.toString(allocator),
-                        }, a.getReference());
+                        if (!argtype.matchType(func_version.get(b.*.base.name).?))
+                            try ctx.Error("Type parameter '{s}' was already bound to '{s}' but got '{s}'", .{
+                                b.*.base.name,
+                                func_version.get(b.*.base.name).?.toString(allocator),
+                                argtype.toString(allocator),
+                            }, a.getReference());
+                    } else {
+                        try func_version.put(b.*.base.name, argtype);
                     }
-                    try func_version.put(b.*.base.name, argtype);
                 },
             }
         } else if (!argtype.decided.match(b)) {
@@ -140,6 +154,7 @@ pub fn getTypeOfScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) (s
 pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std.mem.Allocator.Error || errors.bbcErrors)!Type {
     return switch (value.*) {
         .intLit => try CreateTypeInt(allocator, false),
+        .floatLit => try CreateTypeFloat(allocator, false),
         .stringLit => try CreateTypeString(allocator, false),
         .charLit => try CreateTypeChar(allocator, false),
         .varDec => try CreateTypeVoid(allocator, false),
@@ -309,14 +324,16 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
         const argtype = try getTypeOfValue(arg, ctx, allocator);
         // Adding a type to the version
         if (t.base == .name and analyser.typeparamContains(signature.typeparam, t.base.name)) {
-            // If there's a type alias, then we get to assign it
             if (func_version.contains(t.base.name) and func_version.get(t.base.name).? == .decided) {
-                try ctx.Error("'{s}'' is already set to be type '{s}'", .{
-                    t.base.name,
-                    func_version.get(t.base.name).?.toString(allocator),
-                }, arg.getReference());
+                if (!argtype.matchType(func_version.get(t.base.name).?))
+                    try ctx.Error("Type parameter '{s}' was already bound to '{s}' but got '{s}'", .{
+                        t.base.name,
+                        func_version.get(t.base.name).?.toString(allocator),
+                        argtype.toString(allocator),
+                    }, arg.getReference());
+            } else {
+                try func_version.put(t.base.name, argtype);
             }
-            try func_version.put(t.base.name, argtype);
         }
         // Verifying that the type we're trying to infer is (or not) in the function's type aliases
         if (t.base == .name and func_version.contains(t.base.name)) {
@@ -487,6 +504,8 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
     defer voidType.deinit(allocator);
     const intType = try CreateTypeInt(allocator, false);
     defer intType.deinit(allocator);
+    const floatType = try CreateTypeFloat(allocator, false);
+    defer floatType.deinit(allocator);
     const charType = try CreateTypeChar(allocator, false);
     defer charType.deinit(allocator);
     const stringType = try CreateTypeString(allocator, false);
@@ -583,6 +602,10 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
         .intLit => {
             if (!intType.matchType(expType))
                 try ctx.Error("Expected type {s} but it evaluates to Int", .{expType.toString(allocator)}, value.getReference());
+        },
+        .floatLit => {
+            if (!floatType.matchType(expType))
+                try ctx.Error("Expected type {s} but it evaluates to Float", .{expType.toString(allocator)}, value.getReference());
         },
         .charLit => {
             if (!charType.matchType(expType))

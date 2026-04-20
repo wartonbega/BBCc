@@ -7,6 +7,9 @@ pub fn print(val: Values.Value) void {
         .Int => |i| {
             stdout.print("{d}", .{i}) catch {};
         },
+        .Float => |f| {
+            stdout.print("{d}", .{f}) catch {};
+        },
         .Bool => |b| {
             stdout.print("{s}", .{if (b) "true" else "false"}) catch {};
         },

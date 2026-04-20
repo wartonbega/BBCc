@@ -19,6 +19,7 @@ pub fn codegenValue(value: *const Ast.Value, compiler: *Compiler, cctx: *analyse
         .intLit => |i| {
             try genValues.intlit.codegenIntlit(i.value, compiler, cctx);
         },
+        .floatLit => {},
         .boolLit => |b| {
             try genValues.boollit.codegenBoollit(b.value, compiler, cctx);
         },

@@ -44,6 +44,7 @@ pub const Object = struct {
 
 pub const Value = union(enum) {
     Int: i32,
+    Float: f64,
     Bool: bool,
     Null: void,
     Char: u8,
@@ -185,6 +186,7 @@ pub const Value = union(enum) {
     pub fn getType(self: *const Value) []const u8 {
         return switch (self.*) {
             .Int => "Int",
+            .Float => "Float",
             .Bool => "Bool",
             .Null => "Null",
             .Char => "Char",
@@ -196,163 +198,284 @@ pub const Value = union(enum) {
     }
 };
 
+fn floatFromInt(i: i32) f64 {
+    return @as(f64, @floatFromInt(i));
+}
+
 pub fn Plus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Int = self.Int + other.Int },
-            .Char => Value{ .Int = self.Int + other.Char },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Int = lhs + rhs },
+            .Char => |rhs| Value{ .Int = lhs + @as(i32, rhs) },
+            .Bool => |rhs| Value{ .Int = lhs + if (rhs) @as(i32, 1) else @as(i32, 0) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to Int" } },
         },
-        .Char => switch (other) {
-            .Int => Value{ .Char = @intCast(self.Char + other.Int) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        .Char => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Char = @intCast(@as(i32, lhs) + rhs) },
+            .Char => |rhs| Value{ .Char = lhs +% rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to Char" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        .String => |lhs| switch (other) {
+            .Char => |rhs| blk: {
+                var new_content = std.ArrayList(u8).init(ctx.heap);
+                new_content.appendSlice(lhs.content.items) catch break :blk Value{ .Error = .{ .reference = reference, .message = "Out of memory" } };
+                new_content.append(rhs) catch break :blk Value{ .Error = .{ .reference = reference, .message = "Out of memory" } };
+                const new_str = ctx.heap.create(StringObj) catch break :blk Value{ .Error = .{ .reference = reference, .message = "Out of memory" } };
+                new_str.* = .{ .content = new_content, .references = 0 };
+                break :blk Value{ .String = new_str };
+            },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to String" } },
+        },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Float = lhs + rhs },
+            .Int => |rhs| Value{ .Float = lhs + floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to Float" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use + on this type" } },
     };
 }
 
 pub fn Minus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Int = self.Int - other.Int },
-            .Char => Value{ .Int = self.Int - other.Char },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Int = lhs - rhs },
+            .Char => |rhs| Value{ .Int = lhs - @as(i32, rhs) },
+            .Bool => |rhs| Value{ .Int = lhs - if (rhs) @as(i32, 1) else @as(i32, 0) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract this type from Int" } },
         },
-        .Char => switch (other) {
-            .Int => Value{ .Char = @intCast(self.Char - other.Int) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        .Char => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Char = @intCast(@as(i32, lhs) - rhs) },
+            .Char => |rhs| Value{ .Char = lhs -% rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract this type from Char" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot add non-integer values" } },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Float = lhs - rhs },
+            .Int => |rhs| Value{ .Float = lhs - floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract this type from Float" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use - on this type" } },
     };
 }
 
 pub fn Times(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Int = self.Int * other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot multiply non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Int = lhs * rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot multiply this type with Int" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot multiply non-integer values" } },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Float = lhs * rhs },
+            .Int => |rhs| Value{ .Float = lhs * floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot multiply this type with Float" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use * on this type" } },
     };
 }
 
 pub fn Div(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => if (other.Int != 0) Value{ .Int = @divFloor(self.Int, other.Int) } else Value{ .Error = .{ .reference = reference, .message = "Cannot divide by zero" } },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot divide non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| if (rhs != 0) Value{ .Int = @divFloor(lhs, rhs) } else Value{ .Error = .{ .reference = reference, .message = "Cannot divide by zero" } },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot divide Int by this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot divide non-integer values" } },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Float = lhs / rhs },
+            .Int => |rhs| Value{ .Float = lhs / floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot divide Float by this type" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use / on this type" } },
     };
 }
 
 pub fn Modulus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => if (other.Int != 0) Value{ .Int = @mod(self.Int, other.Int) } else Value{ .Error = .{ .reference = reference, .message = "Cannot modulo by zero" } },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot modulo non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| if (rhs != 0) Value{ .Int = @mod(lhs, rhs) } else Value{ .Error = .{ .reference = reference, .message = "Cannot modulo by zero" } },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot modulo Int by this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot modulo non-integer values" } },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Float = @mod(lhs, rhs) },
+            .Int => |rhs| Value{ .Float = @mod(lhs, floatFromInt(rhs)) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot modulo Float by this type" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use % on this type" } },
     };
 }
 
 pub fn Lt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Bool = self.Int < other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Bool = lhs < rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| Value{ .Bool = lhs < rhs },
+            .Int => |rhs| Value{ .Bool = @as(i32, lhs) < rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+        },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Bool = lhs < rhs },
+            .Int => |rhs| Value{ .Bool = lhs < floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use < on this type" } },
     };
 }
 
 pub fn Gt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Bool = self.Int > other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Bool = lhs > rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| Value{ .Bool = lhs > rhs },
+            .Int => |rhs| Value{ .Bool = @as(i32, lhs) > rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+        },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Bool = lhs > rhs },
+            .Int => |rhs| Value{ .Bool = lhs > floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use > on this type" } },
     };
 }
 
 pub fn Le(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Bool = self.Int <= other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Bool = lhs <= rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| Value{ .Bool = lhs <= rhs },
+            .Int => |rhs| Value{ .Bool = @as(i32, lhs) <= rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+        },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Bool = lhs <= rhs },
+            .Int => |rhs| Value{ .Bool = lhs <= floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use <= on this type" } },
     };
 }
 
 pub fn Ge(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Bool = self.Int >= other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Bool = lhs >= rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| Value{ .Bool = lhs >= rhs },
+            .Int => |rhs| Value{ .Bool = @as(i32, lhs) >= rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+        },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Bool = lhs >= rhs },
+            .Int => |rhs| Value{ .Bool = lhs >= floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use >= on this type" } },
     };
 }
 
 pub fn Equal(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Bool = self.Int == other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Bool = lhs == rhs },
+            .Null => Value{ .Bool = false },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
         },
-        .Bool => switch (other) {
-            .Bool => Value{ .Bool = self.Bool == other.Bool },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-boolean values" } },
+        .Bool => |lhs| switch (other) {
+            .Bool => |rhs| Value{ .Bool = lhs == rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Bool with this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Unsupported comparison" } },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| Value{ .Bool = lhs == rhs },
+            .Int => |rhs| Value{ .Bool = @as(i32, lhs) == rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+        },
+        .String => |lhs| switch (other) {
+            .String => |rhs| Value{ .Bool = std.mem.eql(u8, lhs.content.items, rhs.content.items) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare String with this type" } },
+        },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Bool = lhs == rhs },
+            .Int => |rhs| Value{ .Bool = lhs == floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+        },
+        .Null => switch (other) {
+            .Null => Value{ .Bool = true },
+            else => Value{ .Bool = false },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Unsupported == comparison" } },
     };
 }
 
 pub fn NotEqual(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Int => switch (other) {
-            .Int => Value{ .Bool = self.Int != other.Int },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-integer values" } },
+        .Int => |lhs| switch (other) {
+            .Int => |rhs| Value{ .Bool = lhs != rhs },
+            .Null => Value{ .Bool = true },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
         },
-        .Bool => switch (other) {
-            .Bool => Value{ .Bool = self.Bool != other.Bool },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare non-boolean values" } },
+        .Bool => |lhs| switch (other) {
+            .Bool => |rhs| Value{ .Bool = lhs != rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Bool with this type" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Unsupported comparison" } },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| Value{ .Bool = lhs != rhs },
+            .Int => |rhs| Value{ .Bool = @as(i32, lhs) != rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+        },
+        .String => |lhs| switch (other) {
+            .String => |rhs| Value{ .Bool = !std.mem.eql(u8, lhs.content.items, rhs.content.items) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare String with this type" } },
+        },
+        .Float => |lhs| switch (other) {
+            .Float => |rhs| Value{ .Bool = lhs != rhs },
+            .Int => |rhs| Value{ .Bool = lhs != floatFromInt(rhs) },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+        },
+        .Null => switch (other) {
+            .Null => Value{ .Bool = false },
+            else => Value{ .Bool = true },
+        },
+        else => Value{ .Error = .{ .reference = reference, .message = "Unsupported != comparison" } },
     };
 }
 
 pub fn Or(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Bool => switch (other) {
-            .Bool => Value{ .Bool = self.Bool or other.Bool },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot perform logical OR on non-boolean values" } },
+        .Bool => |lhs| switch (other) {
+            .Bool => |rhs| Value{ .Bool = lhs or rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'or' on non-boolean values" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot perform logical OR on non-boolean values" } },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'or' on non-boolean values" } },
     };
 }
 
 pub fn And(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
     _ = ctx;
     return switch (self) {
-        .Bool => switch (other) {
-            .Bool => Value{ .Bool = self.Bool and other.Bool },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot perform logical AND on non-boolean values" } },
+        .Bool => |lhs| switch (other) {
+            .Bool => |rhs| Value{ .Bool = lhs and rhs },
+            else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'and' on non-boolean values" } },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot perform logical AND on non-boolean values" } },
+        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'and' on non-boolean values" } },
     };
 }

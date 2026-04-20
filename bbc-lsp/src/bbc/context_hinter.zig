@@ -173,6 +173,27 @@ fn hintSearchProg(pos: position.Position, allocator: std.mem.Allocator, prog: *a
             .StructDef => |sd| {
                 if (sd.reference.contains(pos)) {}
             },
+            .TraitDef => |td| {
+                if (td.reference.contains(pos)) {
+                    var it = td.methods.iterator();
+                    while (it.next()) |entry| {
+                        const sig = entry.value_ptr.*;
+                        if (sig.reference.contains(pos)) {
+                            return hinterInfo{ .ttype = .{ .typeName = sig.return_type } };
+                        }
+                    }
+                    return hinterInfo{ .ttype = .{ .literal = td.name } };
+                }
+            },
+            .TraitImpl => |ti| {
+                if (ti.reference.contains(pos)) {
+                    for (ti.methods.items) |method| {
+                        if (method.reference.contains(pos)) {
+                            return hintSearchFuncdef(pos, allocator, method, ctx);
+                        }
+                    }
+                }
+            },
         }
     }
     return hinterInfo{ .ttype = .{ .noInfo = {} } };
@@ -322,6 +343,33 @@ fn hintGetDefinitionProg(pos: position.Position, allocator: std.mem.Allocator, p
             },
             .StructDef => |sd| {
                 if (sd.reference.contains(pos)) {}
+            },
+            .TraitDef => |td| {
+                if (td.reference.contains(pos)) {
+                    var it = td.methods.iterator();
+                    while (it.next()) |entry| {
+                        const sig = entry.value_ptr.*;
+                        for (sig.arguments.items) |arg| {
+                            if (arg.typeref.contains(pos))
+                                return ctx.getTypeDefinition(arg._type);
+                        }
+                        if (sig.reference.contains(pos))
+                            return ctx.getTypeDefinition(sig.return_type);
+                    }
+                    return td.reference;
+                }
+            },
+            .TraitImpl => |ti| {
+                if (ti.reference.contains(pos)) {
+                    for (ti.methods.items) |method| {
+                        if (method.reference.contains(pos)) {
+                            return hintGetDefinitionFuncdef(pos, allocator, method, ctx);
+                        }
+                    }
+                    // Clicking on the trait name → jump to trait def
+                    if (ctx.trait_defs.get(ti.trait_name)) |td|
+                        return td.reference;
+                }
             },
         }
     }
@@ -515,6 +563,8 @@ fn collectHintsFromProg(collector: *InlayHintCollector, prog: *ast.Program, ctx:
                 collectHintsFromFuncdef(collector, fd, ctx);
             },
             .StructDef => {},
+            .TraitDef => {},
+            .TraitImpl => {},
         }
     }
 }
