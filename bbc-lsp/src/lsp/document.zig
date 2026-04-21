@@ -1,6 +1,7 @@
 const std = @import("std");
 const parser = @import("../bbc/parser.zig");
 const lexer = @import("../bbc/lexer.zig");
+const imports = @import("../bbc/imports.zig");
 const ast = @import("../bbc/ast.zig");
 const analyser = @import("../bbc/analyser.zig");
 const protocol = @import("protocol.zig");
@@ -108,6 +109,17 @@ pub const Document = struct {
             return;
         };
         self.program = prog;
+
+        // Step 2b: Resolve imports (file:// URI → path)
+        const file_path = if (std.mem.startsWith(u8, self.uri, "file://"))
+            self.uri[7..]
+        else
+            self.uri;
+        imports.resolveAllImports(prog, file_path, &self.arena) catch |err| {
+            if (err == imports.ImportError.CyclicImport or err == imports.ImportError.FileNotFound) {
+                // bbcError already printed; continue with what we have
+            } else return err;
+        };
 
         // Step 3: Analyze
         const ctx = try analyser.Context.init(self.arena.allocator());

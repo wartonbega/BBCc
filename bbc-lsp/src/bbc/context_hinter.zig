@@ -115,6 +115,18 @@ fn hintSearchValue(pos: position.Position, allocator: std.mem.Allocator, value: 
         .unaryOperatorRight => |uopr| {
             if (uopr.expr.getReference().contains(pos))
                 return hintSearchValue(pos, allocator, uopr.expr, ctx);
+            // Namespace access: import_file.funcName
+            if (uopr.expr.* == .identifier) {
+                const ns = uopr.expr.identifier.name;
+                const attr = uopr.operator.pointAttr;
+                const qualified = std.fmt.allocPrint(allocator, "{s}.{s}", .{ ns, attr }) catch
+                    return hinterInfo{ .ttype = .{ .noInfo = {} } };
+                if (ctx.functionExist(qualified)) {
+                    const sig = analyser.createFunctionSignature(ctx.getFunction(qualified), allocator) catch
+                        return hinterInfo{ .ttype = .{ .noInfo = {} } };
+                    return hinterInfo{ .ttype = .{ .func = .{ .sig = sig, .name = qualified } } };
+                }
+            }
             const t = Types.getTypeOfValue(uopr.expr, ctx, allocator) catch {
                 return hinterInfo{ .ttype = .{ .noInfo = {} } };
             };
@@ -194,6 +206,7 @@ fn hintSearchProg(pos: position.Position, allocator: std.mem.Allocator, prog: *a
                     }
                 }
             },
+            .ImportDef => {},
         }
     }
     return hinterInfo{ .ttype = .{ .noInfo = {} } };
@@ -294,6 +307,16 @@ fn hintGetDefinitionValue(pos: position.Position, allocator: std.mem.Allocator, 
         .unaryOperatorRight => |uopr| {
             if (uopr.expr.getReference().contains(pos))
                 return hintGetDefinitionValue(pos, allocator, uopr.expr, ctx);
+            // Namespace access: import_file.funcName or import_file.TypeName
+            if (uopr.expr.* == .identifier) {
+                const ns = uopr.expr.identifier.name;
+                const attr = uopr.operator.pointAttr;
+                const qualified = std.fmt.allocPrint(allocator, "{s}.{s}", .{ ns, attr }) catch return null;
+                if (ctx.functionExist(qualified))
+                    return ctx.getFunction(qualified).reference;
+                if (ctx.typeDefExist(qualified))
+                    return ctx.getTypeDef(qualified).reference;
+            }
             const t = Types.getTypeOfValue(uopr.expr, ctx, allocator) catch {
                 return null;
             };
@@ -371,6 +394,7 @@ fn hintGetDefinitionProg(pos: position.Position, allocator: std.mem.Allocator, p
                         return td.reference;
                 }
             },
+            .ImportDef => {},
         }
     }
     return null;
@@ -564,7 +588,12 @@ fn collectHintsFromProg(collector: *InlayHintCollector, prog: *ast.Program, ctx:
             },
             .StructDef => {},
             .TraitDef => {},
-            .TraitImpl => {},
+            .TraitImpl => |ti| {
+            for (ti.methods.items) |method| {
+                collectHintsFromFuncdef(collector, method, ctx);
+            }
+        },
+            .ImportDef => {},
         }
     }
 }

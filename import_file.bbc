@@ -1,0 +1,10 @@
+
+struct Toto {
+    Int a,
+    Int b
+}
+
+
+func test (Int x) Int {
+    x * x
+}

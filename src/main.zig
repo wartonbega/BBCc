@@ -5,6 +5,7 @@
 const analyser = @import("analyser.zig");
 const parser = @import("parser.zig");
 const lexer = @import("lexer.zig");
+const imports = @import("imports.zig");
 const codegen = @import("codegen.zig");
 const interpretor = @import("interpretor/interpretor.zig");
 const x86 = @import("codegen/x86.zig");
@@ -36,6 +37,7 @@ pub fn main() !void {
     defer tokens.deinit();
     const alloc = arena.allocator();
     const prog = try lexer.lexeProgram(tokens, alloc, filename);
+    try imports.resolveAllImports(prog, filename, &arena);
     const ctx = try analyser.Context.init(arena.allocator());
     defer ctx.deinit();
     try analyser.analyse(prog, ctx, arena.allocator());

@@ -471,11 +471,18 @@ pub const traitImpl = struct {
     reference: Parser.Location,
 };
 
+pub const importDef = struct {
+    path: []const u8,
+    libname: ?[]const u8,
+    reference: Parser.Location,
+};
+
 pub const ProgInstructions = union(enum) {
     FuncDef: *funcDef,
     StructDef: *structDef,
     TraitDef: *traitDef,
     TraitImpl: *traitImpl,
+    ImportDef: *importDef,
 
     pub fn print(self: *ProgInstructions) void {
         switch (self.*) {
@@ -483,6 +490,7 @@ pub const ProgInstructions = union(enum) {
             .StructDef => self.StructDef.print(),
             .TraitDef => |td| std.debug.print("TraitDef {s}\n", .{td.name}),
             .TraitImpl => |ti| std.debug.print("TraitImpl {s}: {s}\n", .{ ti.trait_name, ti.type_name }),
+            .ImportDef => |id| std.debug.print("ImportDef \"{s}\"\n", .{id.path}),
         }
     }
 };

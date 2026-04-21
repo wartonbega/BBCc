@@ -7,6 +7,30 @@ const ast = @import("../bbc/ast.zig");
 
 const Allocator = std.mem.Allocator;
 
+fn isIdentChar(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+        (c >= '0' and c <= '9') or c == '_';
+}
+
+/// Extracts the identifier immediately before the `.` trigger at (line, char).
+/// Returns null if no identifier precedes the dot.
+fn getNamespacePrefix(text: []const u8, line: u32, char: u32) ?[]const u8 {
+    if (char == 0) return null;
+    var line_iter = std.mem.splitScalar(u8, text, '\n');
+    var cur: u32 = 0;
+    while (line_iter.next()) |line_text| {
+        defer cur += 1;
+        if (cur != line) continue;
+        const dot_idx = char - 1;
+        if (dot_idx >= line_text.len or line_text[dot_idx] != '.') return null;
+        var start: usize = dot_idx;
+        while (start > 0 and isIdentChar(line_text[start - 1])) start -= 1;
+        if (start == dot_idx) return null;
+        return line_text[start..dot_idx];
+    }
+    return null;
+}
+
 pub const Handlers = struct {
     store: *document.DocumentStore,
     allocator: Allocator,
@@ -244,11 +268,80 @@ pub const Handlers = struct {
             });
         }
 
+        // When '.' is the trigger, check for namespace prefix (e.g. "import_file.")
+        if (params.context) |ctx_params| {
+            if (ctx_params.triggerKind == .TriggerCharacter and
+                ctx_params.triggerCharacter != null and
+                std.mem.eql(u8, ctx_params.triggerCharacter.?, "."))
+            {
+                if (getNamespacePrefix(doc.text, params.position.line, params.position.character)) |ns_prefix| {
+                    const prefix_dot = try std.fmt.allocPrint(arena, "{s}.", .{ns_prefix});
+                    var ns_items = std.ArrayList(protocol.CompletionItem).init(arena);
+
+                    // Functions from the analysed context
+                    if (doc.ctx) |analysis_ctx| {
+                        var it = analysis_ctx.functions.iterator();
+                        while (it.next()) |entry| {
+                            const fname = entry.key_ptr.*;
+                            if (!std.mem.startsWith(u8, fname, prefix_dot)) continue;
+                            const suffix = fname[prefix_dot.len..];
+                            // Skip method names (ns.Type.method — contain another dot)
+                            if (std.mem.indexOfScalar(u8, suffix, '.') != null) continue;
+                            try ns_items.append(.{
+                                .label = suffix,
+                                .kind = .Function,
+                                .detail = "Function",
+                            });
+                        }
+                    }
+
+                    // Structs and traits from the program
+                    if (doc.program) |prog| {
+                        for (prog.instructions.items) |inst| {
+                            switch (inst.*) {
+                                .StructDef => |sd| {
+                                    if (!std.mem.startsWith(u8, sd.name, prefix_dot)) continue;
+                                    const suffix = sd.name[prefix_dot.len..];
+                                    if (std.mem.indexOfScalar(u8, suffix, '.') != null) continue;
+                                    try ns_items.append(.{
+                                        .label = suffix,
+                                        .kind = .Struct,
+                                        .detail = "Struct",
+                                    });
+                                },
+                                .TraitDef => |td| {
+                                    if (!std.mem.startsWith(u8, td.name, prefix_dot)) continue;
+                                    const suffix = td.name[prefix_dot.len..];
+                                    if (std.mem.indexOfScalar(u8, suffix, '.') != null) continue;
+                                    try ns_items.append(.{
+                                        .label = suffix,
+                                        .kind = .Interface,
+                                        .detail = "Trait",
+                                    });
+                                },
+                                else => {},
+                            }
+                        }
+                    }
+
+                    if (ns_items.items.len > 0) {
+                        std.log.info("Returning {} namespace completion items for '{s}'", .{ ns_items.items.len, ns_prefix });
+                        return protocol.CompletionList{
+                            .isIncomplete = false,
+                            .items = ns_items.items,
+                        };
+                    }
+                }
+            }
+        }
+
         // If we have a parsed program, add functions and structs
         if (doc.program) |prog| {
             for (prog.instructions.items) |inst| {
                 switch (inst.*) {
                     .FuncDef => |func| {
+                        // Skip namespaced names (imported with alias) in the flat list
+                        if (std.mem.indexOfScalar(u8, func.name, '.') != null) continue;
                         try items.append(.{
                             .label = func.name,
                             .kind = .Function,
@@ -256,13 +349,15 @@ pub const Handlers = struct {
                         });
                     },
                     .StructDef => |structdef| {
+                        // Skip namespaced names
+                        if (std.mem.indexOfScalar(u8, structdef.name, '.') != null) continue;
                         try items.append(.{
                             .label = structdef.name,
                             .kind = .Struct,
                             .detail = "Struct",
                         });
 
-                        // If triggered by '.', add struct fields
+                        // If triggered by '.', add struct fields (for variable.field access)
                         if (params.context) |ctx| {
                             if (ctx.triggerKind == .TriggerCharacter and
                                 ctx.triggerCharacter != null and
@@ -284,6 +379,7 @@ pub const Handlers = struct {
                             }
                         }
                     },
+                    else => {},
                 }
             }
         }

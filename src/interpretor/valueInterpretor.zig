@@ -164,6 +164,16 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
             }
         },
         .unaryOperatorRight => |uop| {
+            // Namespace access: ns.name — look up "ns.name" as a flat variable
+            if (uop.expr.* == .identifier) {
+                var buf: [512]u8 = undefined;
+                const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{
+                    uop.expr.identifier.name,
+                    uop.operator.pointAttr,
+                }) catch "";
+                if (ctx.variableExist(qualified))
+                    return ctx.getVariable(qualified);
+            }
             const operand = try interpreteValue(uop.expr, ctx);
             return operand.getHabitant(uop.operator.pointAttr);
         },

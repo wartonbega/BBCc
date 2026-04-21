@@ -1,7 +1,5 @@
-struct Toto {
-    Int a,
-    Int b
-}
+import("import_file.bbc") as import_file
+
 
 
 trait Stringable(Type) {
@@ -10,33 +8,34 @@ trait Stringable(Type) {
     func with (Type other) String
 }
 
-implement Stringable: Toto {
+implement Stringable: import_file.Toto {
     func toString() String {
         "(a, b)"
     }
 
-    func with (Toto other) String {
+    func with (import_file.Toto other) String {
         "(a, b)(a', b')"
     }
 }
 
 
-func <Type: Stringable> test (Type x, Type y) Void {
+func <Type: Stringable, Type2: Add> test (Type x, Type2 y) Void {
     println(x.toString())
-    println(x.with(y))
+    println(y)
 }
 
 
 func main() Int {
-    let first = @Toto{
+    let first = @import_file.Toto{
         a = 1,
         b = 2
     }
 
-    let second = @Toto{
+    let second = @import_file.Toto{
         a = 3,
         b = 4
     }
-    
+    test(first, 1)
+    println(import_file.test(8))
     1
 }

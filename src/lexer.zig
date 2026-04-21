@@ -108,7 +108,15 @@ pub fn lexeType(reader: *tokenReader, allocator: Allocator) !*ast.Type {
         references_counter += 1;
     }
 
-    const base_name = (try reader.consume(TokenType.IDENT)).value;
+    var base_name: []const u8 = (try reader.consume(TokenType.IDENT)).value;
+    if (reader.canPeek() and (try reader.peek()).type == .DOT) {
+        const after_dot = reader.peekAt(1);
+        if (after_dot != null and after_dot.?.type == .IDENT) {
+            _ = try reader.consume(.DOT);
+            const type_part = (try reader.consume(.IDENT)).value;
+            base_name = try std.mem.concat(allocator, u8, &.{ base_name, ".", type_part });
+        }
+    }
 
     const ret = try allocator.create(ast.Type);
     ret.* = ast.Type{
@@ -133,7 +141,15 @@ pub fn lexeTypeWithLocation(reader: *tokenReader, allocator: Allocator) !struct 
     }
 
     const tok_name = try reader.consume(TokenType.IDENT);
-    const base_name = tok_name.value;
+    var base_name: []const u8 = tok_name.value;
+    if (reader.canPeek() and (try reader.peek()).type == .DOT) {
+        const after_dot = reader.peekAt(1);
+        if (after_dot != null and after_dot.?.type == .IDENT) {
+            _ = try reader.consume(.DOT);
+            const type_part = (try reader.consume(.IDENT)).value;
+            base_name = try std.mem.concat(allocator, u8, &.{ base_name, ".", type_part });
+        }
+    }
 
     const ret = try allocator.create(ast.Type);
     ret.* = ast.Type{
@@ -260,8 +276,16 @@ pub fn lexeValue7(reader: *tokenReader, allocator: Allocator) (std.mem.Allocator
             stc_init.habitants = .init(allocator);
 
             ret.structInit = stc_init;
-            // The name is optionnal
-            const stc_name = if (reader.canPeek() and (try reader.peek()).type == .IDENT) (try reader.consume(.IDENT)).value else @as([]const u8, "");
+            // The name is optional; support namespaced form: @ns.TypeName
+            var stc_name: []const u8 = if (reader.canPeek() and (try reader.peek()).type == .IDENT) (try reader.consume(.IDENT)).value else "";
+            if (stc_name.len > 0 and reader.canPeek() and (try reader.peek()).type == .DOT) {
+                const after_dot = reader.peekAt(1);
+                if (after_dot != null and after_dot.?.type == .IDENT) {
+                    _ = try reader.consume(.DOT);
+                    const type_part = (try reader.consume(.IDENT)).value;
+                    stc_name = try std.mem.concat(allocator, u8, &.{ stc_name, ".", type_part });
+                }
+            }
             stc_init.name = stc_name;
 
             _ = (try reader.consume(.O_CUR));
@@ -845,9 +869,25 @@ pub fn lexeTraitDef(reader: *tokenReader, allocator: Allocator) !*ast.traitDef {
 
 pub fn lexeTraitImpl(reader: *tokenReader, allocator: Allocator) !*ast.traitImpl {
     const impl_kwd = try reader.consume(.IMPLEMENT);
-    const trait_name = (try reader.consume(.IDENT)).value;
+    var trait_name: []const u8 = (try reader.consume(.IDENT)).value;
+    if (reader.canPeek() and (try reader.peek()).type == .DOT) {
+        const after = reader.peekAt(1);
+        if (after != null and after.?.type == .IDENT) {
+            _ = try reader.consume(.DOT);
+            const part = (try reader.consume(.IDENT)).value;
+            trait_name = try std.mem.concat(allocator, u8, &.{ trait_name, ".", part });
+        }
+    }
     _ = try reader.consume(.COLON);
-    const type_name = (try reader.consume(.IDENT)).value;
+    var type_name: []const u8 = (try reader.consume(.IDENT)).value;
+    if (reader.canPeek() and (try reader.peek()).type == .DOT) {
+        const after = reader.peekAt(1);
+        if (after != null and after.?.type == .IDENT) {
+            _ = try reader.consume(.DOT);
+            const part = (try reader.consume(.IDENT)).value;
+            type_name = try std.mem.concat(allocator, u8, &.{ type_name, ".", part });
+        }
+    }
     _ = try reader.consume(.O_CUR);
 
     const stc_type = try allocator.create(ast.Type);
@@ -900,13 +940,28 @@ pub fn lexeProgram(tokens: ArrayList(parser.Token), allocator: Allocator, uri: [
                 traitimpl.* = ast.ProgInstructions{ .TraitImpl = try lexeTraitImpl(&reader, allocator) };
                 try ret.instructions.append(traitimpl);
             },
-            // TokenType.IMPORT => {
-            //     // Preprocessor inst => just copies the imported files' code here
-            //     const import_token = (try reader.consume(.IMPORT));
-            //     const file_name = (try reader.consume(.STRINGLIT)).value;
-            //     // File name can be the name of the file (relative path to the file)
-            //     // or the name of a file in the include dir
-            // },
+            TokenType.IMPORT => {
+                const import_token = try reader.consume(.IMPORT);
+                _ = try reader.consume(.O_PAR);
+                const file_name_tok = try reader.consume(.STRINGLIT);
+                const c_par = try reader.consume(.C_PAR);
+                const libname: ?[]const u8 = if (reader.canPeek() and
+                    (try reader.peek()).type == .IDENT and
+                    std.mem.eql(u8, (try reader.peek()).value, "as"))
+                blk: {
+                    _ = try reader.consume(.IDENT); // consume "as"
+                    break :blk (try reader.consume(.IDENT)).value;
+                } else null;
+                const impdef = try allocator.create(ast.importDef);
+                impdef.* = .{
+                    .path = file_name_tok.value,
+                    .libname = libname,
+                    .reference = import_token.location.unionWith(c_par.location),
+                };
+                const inst = try allocator.create(ast.ProgInstructions);
+                inst.* = ast.ProgInstructions{ .ImportDef = impdef };
+                try ret.instructions.append(inst);
+            },
             else => {
                 try lexerError("Unexpected token {s}", .{token.type.toString()}, token.location, &reader);
             },
@@ -944,6 +999,28 @@ pub fn lexeProgramWithReader(reader: *tokenReader, allocator: Allocator) !*ast.P
                 const traitimpl = try allocator.create(ast.ProgInstructions);
                 traitimpl.* = ast.ProgInstructions{ .TraitImpl = try lexeTraitImpl(reader, allocator) };
                 try ret.instructions.append(traitimpl);
+            },
+            TokenType.IMPORT => {
+                const import_token = try reader.consume(.IMPORT);
+                _ = try reader.consume(.O_PAR);
+                const file_name_tok = try reader.consume(.STRINGLIT);
+                const c_par = try reader.consume(.C_PAR);
+                const libname: ?[]const u8 = if (reader.canPeek() and
+                    (try reader.peek()).type == .IDENT and
+                    std.mem.eql(u8, (try reader.peek()).value, "as"))
+                blk: {
+                    _ = try reader.consume(.IDENT); // consume "as"
+                    break :blk (try reader.consume(.IDENT)).value;
+                } else null;
+                const impdef = try allocator.create(ast.importDef);
+                impdef.* = .{
+                    .path = file_name_tok.value,
+                    .libname = libname,
+                    .reference = import_token.location.unionWith(c_par.location),
+                };
+                const inst = try allocator.create(ast.ProgInstructions);
+                inst.* = ast.ProgInstructions{ .ImportDef = impdef };
+                try ret.instructions.append(inst);
             },
             else => {
                 try lexerError("Unexpected token {s}", .{token.type.toString()}, token.location, reader);

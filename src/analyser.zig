@@ -655,6 +655,15 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
         },
         .unaryOperatorRight => |uop_right| {
             if (uop_right.operator == .pointAttr) {
+                // Check for namespace access: ns.funcName or ns.TypeName
+                if (uop_right.expr.* == .identifier) {
+                    const ns = uop_right.expr.identifier.name;
+                    const attr = uop_right.operator.pointAttr;
+                    const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ ns, attr });
+                    if (ctx.functionExist(qualified)) {
+                        return Types.Type{ .decided = try createFunctionSignature(ctx.getFunction(qualified), allocator) };
+                    }
+                }
                 const left_value = try analyseValue(uop_right.expr, ctx, allocator);
                 if (left_value == .undecided)
                     return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
@@ -1038,7 +1047,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
                     try ctx.Error("Can't shadow the definition of function '{s}' previously defined here: {s}", .{ inst.FuncDef.name, ctx.getFunction(inst.FuncDef.name).reference.toString() }, inst.FuncDef.reference);
                 try ctx.setFunction(func.name, func);
             },
-            .TraitDef, .TraitImpl, .StructDef => {},
+            .TraitDef, .TraitImpl, .StructDef, .ImportDef => {},
         }
     }
 
@@ -1055,7 +1064,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
             .StructDef => |stct| {
                 try analyseStructDef(stct, ctx, allocator);
             },
-            .FuncDef, .TraitDef, .TraitImpl => {},
+            .FuncDef, .TraitDef, .TraitImpl, .ImportDef => {},
         }
     }
 
