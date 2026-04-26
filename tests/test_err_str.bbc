@@ -1,0 +1,11 @@
+func safeChar(String s, Int i) Char {
+    s[i] ? err '?'
+}
+
+func main() Int {
+    let word = "hello"
+    println(safeChar(word, 0))
+    println(safeChar(word, 4))
+    println(safeChar(word, 99))
+    1
+}

@@ -21,9 +21,13 @@ pub const Trait = enum {
     And,
     Or,
 
+    Not,
+
     Display,
 
     PointAccession,
+    Subscription, // [] subscript/index read operator
+    IndexSet,     // []= subscript/index write operator
 };
 
 const TraitHashmap = std.hash_map.StringHashMap(ArrayList(Trait));
@@ -96,19 +100,117 @@ pub fn initBasicTraits(ctx: *analyser.Context, allocator: std.mem.Allocator) !vo
 
         var ops = ArrayList(ast.binOperator).init(allocator);
         defer ops.deinit();
+        var has_unary_not = false;
+        var has_subscription = false;
+        var has_index_set = false;
         var ops_iter = std.mem.splitScalar(u8, ops_str, ' ');
         while (ops_iter.next()) |tok| {
             const trimmed = std.mem.trim(u8, tok, " \t");
             if (trimmed.len == 0) continue;
+            if (std.mem.eql(u8, trimmed, "not")) {
+                has_unary_not = true;
+                continue;
+            }
+            if (std.mem.eql(u8, trimmed, "[]")) {
+                has_subscription = true;
+                const t_traits = ctx.trait_map.getPtr(current_type.?).?;
+                var already_sub = false;
+                for (t_traits.items) |tr| {
+                    if (tr == .Subscription) { already_sub = true; break; }
+                }
+                if (!already_sub) try t_traits.append(.Subscription);
+                continue;
+            }
+            if (std.mem.eql(u8, trimmed, "[]=")) {
+                has_index_set = true;
+                const t_traits = ctx.trait_map.getPtr(current_type.?).?;
+                var already = false;
+                for (t_traits.items) |tr| {
+                    if (tr == .IndexSet) { already = true; break; }
+                }
+                if (!already) try t_traits.append(.IndexSet);
+                continue;
+            }
             const op = configStringToOperator(trimmed) orelse continue;
             try ops.append(op);
             const trait = traitFromOperator(op);
             const t_traits = ctx.trait_map.getPtr(current_type.?).?;
             var already = false;
             for (t_traits.items) |tr| {
-                if (tr == trait) { already = true; break; }
+                if (tr == trait) {
+                    already = true;
+                    break;
+                }
             }
             if (!already) try t_traits.append(trait);
+        }
+
+        // Register unary Not operator (no rhs type)
+        if (has_unary_not) {
+            const t_traits = ctx.trait_map.getPtr(current_type.?).?;
+            var already = false;
+            for (t_traits.items) |tr| {
+                if (tr == .Not) {
+                    already = true;
+                    break;
+                }
+            }
+            if (!already) try t_traits.append(.Not);
+            try ctx.type_implem.getPtr(current_type.?).?.append(.{
+                .name = "Not",
+                .signature = .{
+                    .argtypes = ArrayList(*ast.Type).init(allocator),
+                    .retype = ret_type,
+                    .typeparam = ArrayList(ast.TypeParam).init(allocator),
+                    .fname = "Not",
+                },
+            });
+        }
+
+        // Register Subscription ([] operator) implementation for non-generic types.
+        // Generic types like Buffer<Type> are handled by the .buffer special case in typeMatchTrait.
+        if (has_subscription) {
+            const is_generic_header = std.mem.indexOf(u8, current_type.?, "<") != null;
+            if (!is_generic_header) {
+                const idx_type = try configGetOrCreateType(&type_cache, "Int", false, allocator);
+                try ctx.type_implem.getPtr(current_type.?).?.append(.{
+                    .name = "Subscription",
+                    .signature = .{
+                        .argtypes = blk: {
+                            var args = ArrayList(*ast.Type).init(allocator);
+                            try args.append(idx_type);
+                            break :blk args;
+                        },
+                        .retype = ret_type,
+                        .typeparam = ArrayList(ast.TypeParam).init(allocator),
+                        .fname = "Subscription",
+                    },
+                });
+            }
+        }
+
+        // Register IndexSet ([]= operator) implementation for non-generic types.
+        // Generic/buffer types are handled by the .buffer special case in typeMatchTrait.
+        if (has_index_set) {
+            const is_generic_header = std.mem.indexOf(u8, current_type.?, "<") != null;
+            if (!is_generic_header) {
+                const idx_type = try configGetOrCreateType(&type_cache, "Int", false, allocator);
+                const void_type = try configGetOrCreateType(&type_cache, "Void", false, allocator);
+                try ctx.type_implem.getPtr(current_type.?).?.append(.{
+                    .name = "IndexSet",
+                    .signature = .{
+                        .argtypes = blk: {
+                            var args = ArrayList(*ast.Type).init(allocator);
+                            try args.append(idx_type);
+                            try args.append(ret_type);
+                            break :blk args;
+                        },
+                        .retype = void_type,
+                        .typeparam = ArrayList(ast.TypeParam).init(allocator),
+                        .fname = "IndexSet",
+                    },
+                });
+            }
         }
 
         var rhs_iter = std.mem.splitScalar(u8, rhs_str, ' ');
@@ -156,6 +258,7 @@ pub fn typeMatchTrait(trait_map: *TraitHashmap, typealiases: *TypeTraitHashmap, 
     switch (typ) {
         .decided => |t| {
             switch (t.base) { // if there is a base that is aliased and the alias matches the requiered traits
+                .buffer => return trait == .Subscription or trait == .IndexSet, // raw buffers support [] and []=
                 .name => |name| if (typealiases.contains(name)) {
                     for (typealiases.get(name).?.items) |aliased_trait| {
                         if (trait == aliased_trait)
@@ -168,7 +271,7 @@ pub fn typeMatchTrait(trait_map: *TraitHashmap, typealiases: *TypeTraitHashmap, 
                         }
                     }
                 },
-                // function has no traits
+                // function and generic types have no direct traits
                 else => return false,
             }
         },
@@ -231,7 +334,10 @@ pub fn traitFromString(t: []const u8) Trait {
     if (std.mem.eql(u8, t, "Gr")) return Trait.Gr;
     if (std.mem.eql(u8, t, "And")) return Trait.And;
     if (std.mem.eql(u8, t, "Or")) return Trait.Or;
+    if (std.mem.eql(u8, t, "Not")) return Trait.Not;
     if (std.mem.eql(u8, t, "Display")) return Trait.Display;
+    if (std.mem.eql(u8, t, "Subscription")) return Trait.Subscription;
+    if (std.mem.eql(u8, t, "IndexSet")) return Trait.IndexSet;
     std.debug.panic("Unknown trait string: {s}", .{t});
 }
 
@@ -249,8 +355,11 @@ pub fn stringFromTrait(t: Trait) []const u8 {
         .Gr => "Gr",
         .And => "And",
         .Or => "Or",
+        .Not => "Not",
         .Display => "Display",
         .PointAccession => "PointAccession",
+        .Subscription => "Subscription",
+        .IndexSet => "IndexSet",
     };
 }
 
@@ -267,15 +376,17 @@ pub fn defaultReturnType(t: Trait, param: Types.Type, alloc: std.mem.Allocator) 
     // for example (here, '.' representes any type), with type T, (T + .) should return T,
     // but (T == .) should return Bool
     return switch (t) {
-        .Add, .Sub, .Mult, .Div, .Mod, .And, .Or => param,
+        .Add, .Sub, .Mult, .Div, .Mod, .And, .Or, .Not => param,
         .Eq, .Gr, .GrEq, .Le, .LeEq => try Types.CreateTypeBool(alloc, false),
         .Display => try Types.CreateTypeString(alloc, false),
         .PointAccession => try Types.CreateTypeInt(alloc, false),
+        .Subscription => Types.Type{ .undecided = ArrayList(Trait).init(alloc) },
+        .IndexSet => try Types.CreateTypeVoid(alloc, false),
     };
 }
 
 pub fn isBuiltinTraitName(name: []const u8) bool {
-    const builtin = [_][]const u8{ "Add", "Sub", "Mult", "Div", "Mod", "Eq", "GrEq", "LeEq", "Le", "Gr", "And", "Or", "Display" };
+    const builtin = [_][]const u8{ "Add", "Sub", "Mult", "Div", "Mod", "Eq", "GrEq", "LeEq", "Le", "Gr", "And", "Or", "Not", "Display", "Subscription", "IndexSet" };
     for (builtin) |n| {
         if (std.mem.eql(u8, n, name)) return true;
     }
@@ -357,11 +468,14 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
                             .{_type.toString(allocator)},
                             binop.reference,
                         ),
+                        .buffer => {}, // buffers don't participate in binary operator trait tracking
+                        .generic => {}, // generic types don't participate in binary operator trait tracking
                         .name => |n| {
                             if (!ret.contains(n))
                                 try ret.put(n, ArrayList(Trait).init(allocator));
                             try ret.getPtr(n).?.append(traitFromOperator(binop.operator));
                         },
+                        .import_ns => {},
                     }
                 },
                 .undecided => {},
@@ -384,6 +498,13 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
             try traitUnion(&ret, &try getTypeTraits(whileloop.condition, ctx, allocator));
             try traitUnion(&ret, &try getTypeTraits(whileloop.exec, ctx, allocator));
         },
+        .notOp => |notop| {
+            try traitUnion(&ret, &try getTypeTraits(notop.expr, ctx, allocator));
+        },
+        .For => |for_loop| {
+            try traitUnion(&ret, &try getTypeTraits(for_loop.iterable, ctx, allocator));
+            try traitUnion(&ret, &try getTypeTraits(for_loop.exec, ctx, allocator));
+        },
 
         .structInit => |stc_init| {
             var stc_hab_it = stc_init.habitants.iterator();
@@ -402,11 +523,38 @@ pub fn getTypeTraits(instruction: *const ast.Value, ctx: *analyser.Context, allo
                             .{_type.toString(allocator)},
                             uop_right.reference,
                         ),
+                        .buffer => {}, // buffer supports _size/_count, handled in analyseValue
+                        .generic => {},
                         .name => |n| {
                             if (!ret.contains(n))
                                 try ret.put(n, ArrayList(Trait).init(allocator));
                             try ret.getPtr(n).?.append(.PointAccession);
                         },
+                        .import_ns => {},
+                    }
+                },
+                .undecided => {},
+            }
+        },
+        .bufferAlloc => {},
+        .bufferLit => |bl| {
+            for (bl.elements.items) |elem| {
+                try traitUnion(&ret, &try getTypeTraits(elem, ctx, allocator));
+            }
+        },
+        .bufferIndex => |bi| {
+            try traitUnion(&ret, &try getTypeTraits(bi.buffer, ctx, allocator));
+            try traitUnion(&ret, &try getTypeTraits(bi.index, ctx, allocator));
+            const buf_val_type = try Types.getTypeOfValue(bi.buffer, ctx, allocator);
+            switch (buf_val_type) {
+                .decided => |_type| {
+                    switch (_type.base) {
+                        .name => |n| {
+                            if (!ret.contains(n))
+                                try ret.put(n, ArrayList(Trait).init(allocator));
+                            try ret.getPtr(n).?.append(.Subscription);
+                        },
+                        else => {}, // buffer and generic types handle Subscription natively
                     }
                 },
                 .undecided => {},

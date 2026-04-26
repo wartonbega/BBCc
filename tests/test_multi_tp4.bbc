@@ -1,0 +1,59 @@
+struct <Type>List {
+    Int count,
+    Int size,
+    [Type] v
+}
+
+struct <A, B>Pair {
+    A first,
+    B second
+}
+
+func <T: Add> rampe(Int size, T begin) List<T> {
+    let ret = @List{ count = 0, size = size, v = @[#T size] }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = begin + i
+        i = i + 1
+    }
+    ret
+}
+
+func <A, B> makePair(A a, B b) Pair<A, B> {
+    @Pair{ first = a, second = b }
+}
+
+func <A, B> getFirst(Pair<A, B> p) A { p.first }
+func <A, B> getSecond(Pair<A, B> p) B { p.second }
+
+// Function with constrained and unconstrained params side by side
+func <T: Add, U> labelledSum(List<T> lst, U label) Pair<T, U> {
+    @Pair{ first = lst.v[0] + lst.v[1], second = label }
+}
+
+// Function returning generic inside generic (Pair<List<T>, T>)
+func <T: Add> headAndList(List<T> lst) Pair<T, T> {
+    @Pair{ first = lst.v[0], second = lst.v[1] }
+}
+
+func main() Int {
+    let ints = rampe(4, 10)
+    let chars = rampe(3, 'a')
+
+    // labelledSum: constrained T=Int from List<Int>, unconstrained U=Bool
+    let ls = labelledSum(ints, false)
+    println(getFirst(ls))
+    println(getSecond(ls))
+
+    // Same function, different T=Char, U=Int
+    let ls2 = labelledSum(chars, 99)
+    println(getFirst(ls2))
+    println(getSecond(ls2))
+
+    // headAndList
+    let hl = headAndList(ints)
+    println(getFirst(hl))
+    println(getSecond(hl))
+
+    1
+}

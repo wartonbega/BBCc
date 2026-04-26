@@ -17,9 +17,29 @@ pub const TypeFunc = struct {
     fname: []const u8,
 };
 
+pub const TypeGeneric = struct {
+    name: []const u8,
+    params: ArrayList(*Type),
+
+    pub fn specName(self: *const TypeGeneric, allocator: std.mem.Allocator) []const u8 {
+        var buf = std.ArrayList(u8).init(allocator);
+        buf.appendSlice(self.name) catch return "";
+        buf.append('<') catch return "";
+        for (self.params.items, 0..) |p, i| {
+            if (i > 0) buf.appendSlice(", ") catch return "";
+            buf.appendSlice(p.toString(allocator)) catch return "";
+        }
+        buf.append('>') catch return "";
+        return buf.toOwnedSlice() catch return "";
+    }
+};
+
 pub const TypeBase = union(enum) {
     name: []const u8,
     function: TypeFunc,
+    buffer: *Type, // element type
+    generic: TypeGeneric, // e.g. List<Int>
+    import_ns: []const u8, // a namespace/import value, e.g. the `math` in `import("math.bbc") as math`
 };
 
 // The number of references (base = 0), is the number of time
@@ -36,20 +56,45 @@ pub const Type = struct {
         for (0..@intCast(self.references)) |_| {
             std.debug.print("*", .{});
         }
-        _ = switch (self.base) {
+        switch (self.base) {
             .name => std.debug.print("{s}", .{self.base.name}),
-            else => void,
-        };
+            .buffer => |elem| {
+                std.debug.print("[", .{});
+                elem.print();
+                std.debug.print("]", .{});
+            },
+            .generic => |g| {
+                std.debug.print("{s}<", .{g.name});
+                for (g.params.items, 0..) |p, i| {
+                    if (i > 0) std.debug.print(", ", .{});
+                    p.print();
+                }
+                std.debug.print(">", .{});
+            },
+            .function => {},
+            .import_ns => |ns| std.debug.print("Import({s})", .{ns}),
+        }
     }
 
     pub fn toString(self: *Type, allocator: std.mem.Allocator) []const u8 {
-        _ = switch (self.base) {
+        switch (self.base) {
             .name => |name| {
                 if (self.err) {
                     return std.fmt.allocPrint(allocator, "!{s}", .{name}) catch return "";
                 } else {
                     return std.fmt.allocPrint(allocator, "{s}", .{name}) catch return "";
                 }
+            },
+            .buffer => |elem| {
+                const elem_str = elem.toString(allocator);
+                if (self.err) {
+                    return std.fmt.allocPrint(allocator, "![{s}]", .{elem_str}) catch return "";
+                } else {
+                    return std.fmt.allocPrint(allocator, "[{s}]", .{elem_str}) catch return "";
+                }
+            },
+            .generic => |g| {
+                return g.specName(allocator);
             },
             .function => |tfunc| {
                 var args = std.fmt.allocPrint(allocator, "(", .{}) catch return "";
@@ -74,7 +119,8 @@ pub const Type = struct {
                     }) catch return "";
                 }
             },
-        };
+            .import_ns => |ns| return std.fmt.allocPrint(allocator, "Import({s})", .{ns}) catch return "",
+        }
         return "";
     }
 
@@ -84,10 +130,36 @@ pub const Type = struct {
         return switch (self.base) {
             .name => |name| switch (other.base) {
                 .name => |name2| std.mem.eql(u8, name, name2),
+                .generic => |g2| std.mem.eql(u8, name, g2.specName(std.heap.page_allocator)),
                 .function => false,
+                .buffer => false,
+                .import_ns => false,
+            },
+            .buffer => |elem| switch (other.base) {
+                .name => false,
+                .generic => false,
+                .function => false,
+                .import_ns => false,
+                .buffer => |elem2| elem.match(elem2),
+            },
+            .generic => |g| switch (other.base) {
+                .name => |name2| std.mem.eql(u8, g.specName(std.heap.page_allocator), name2),
+                .generic => |g2| blk: {
+                    if (!std.mem.eql(u8, g.name, g2.name)) break :blk false;
+                    if (g.params.items.len != g2.params.items.len) break :blk false;
+                    for (g.params.items, g2.params.items) |p1, p2|
+                        if (!p1.match(p2)) break :blk false;
+                    break :blk true;
+                },
+                .function => false,
+                .buffer => false,
+                .import_ns => false,
             },
             .function => |f1| switch (other.base) {
                 .name => false,
+                .generic => false,
+                .buffer => false,
+                .import_ns => false,
                 .function => |f2| {
                     if (!f1.retype.match(f2.retype))
                         return false;
@@ -99,6 +171,10 @@ pub const Type = struct {
                     }
                     return true;
                 },
+            },
+            .import_ns => |ns1| switch (other.base) {
+                .import_ns => |ns2| std.mem.eql(u8, ns1, ns2),
+                else => false,
             },
         };
     }
@@ -201,6 +277,18 @@ pub const WhileLoop = struct {
     reference: Parser.Location,
 };
 
+pub const ForLoop = struct {
+    var_name: []const u8,
+    iterable: *Value,
+    exec: *Value,
+    reference: Parser.Location,
+};
+
+pub const NotOp = struct {
+    expr: *Value,
+    reference: Parser.Location,
+};
+
 pub const VarDeclaration = struct {
     mutable: bool,
     name: []const u8,
@@ -243,6 +331,23 @@ pub const StructInit = struct {
     habitants: std.StringHashMap(*Value),
 };
 
+pub const BufferAlloc = struct {
+    elem_type: *Type,
+    size: *Value,
+    reference: Parser.Location,
+};
+
+pub const BufferLit = struct {
+    elements: ArrayList(*Value),
+    reference: Parser.Location,
+};
+
+pub const BufferIndex = struct {
+    buffer: *Value,
+    index: *Value,
+    reference: Parser.Location,
+};
+
 pub const Value = union(enum) {
     intLit: struct {
         value: i32,
@@ -278,6 +383,8 @@ pub const Value = union(enum) {
     errorCheck: *ErrCheck,
     If: *IfStmt,
     While: *WhileLoop,
+    For: *ForLoop,
+    notOp: *NotOp,
     //typeCasting: *TypeCasting,
     scope: *Scope,
     funcall: *Funcall,
@@ -294,6 +401,9 @@ pub const Value = union(enum) {
         args: ArrayList(*Value),
         reference: Parser.Location,
     },
+    bufferAlloc: *BufferAlloc,
+    bufferLit: *BufferLit,
+    bufferIndex: *BufferIndex,
     NULL: bool,
 
     pub fn print(self: *Value, rec: i32) void {
@@ -335,6 +445,8 @@ pub const Value = union(enum) {
             .errorCheck => |value| value.reference,
             .If => |value| value.reference,
             .While => |value| value.reference,
+            .For => |value| value.reference,
+            .notOp => |value| value.reference,
             .scope => |value| value.reference,
             .funcall => |value| value.func.getReference(),
             .assignement => |value| value.reference,
@@ -343,6 +455,9 @@ pub const Value = union(enum) {
             .structInit => |value| value.reference,
             .freeKeyword => |value| value.reference,
             .Print => |value| value.reference,
+            .bufferAlloc => |value| value.reference,
+            .bufferLit => |value| value.reference,
+            .bufferIndex => |value| value.reference,
             .NULL => parser.getInbuiltLocation(),
         };
     }
@@ -424,6 +539,10 @@ pub const structDef = struct {
     name: []const u8,
     reference: Parser.Location,
     methods: std.hash_map.StringHashMap(*funcDef),
+    typeparam: ArrayList(TypeParam),
+    // For specializations only: original type-param name → concrete *Type.
+    // Populated by createSpecializationFromVersion; null for non-specialized structs.
+    type_bindings: ?std.StringHashMap(*Type) = null,
 
     pub fn habitantExist(self: *structDef, name: []const u8) bool {
         return self.habitants.contains(name);
@@ -460,6 +579,7 @@ pub const TraitMethodSig = struct {
 pub const traitDef = struct {
     name: []const u8,
     type_param: []const u8,
+    inner_params: ArrayList([]const u8), // names from Type<A, B, ...> in the trait header
     methods: std.StringHashMap(TraitMethodSig),
     reference: Parser.Location,
 };
@@ -467,6 +587,7 @@ pub const traitDef = struct {
 pub const traitImpl = struct {
     trait_name: []const u8,
     type_name: []const u8,
+    type_params: ArrayList([]const u8), // type param names from Toto<Type>, e.g. ["Type"]
     methods: ArrayList(*funcDef),
     reference: Parser.Location,
 };

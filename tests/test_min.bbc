@@ -1,0 +1,26 @@
+struct <Type>List {
+    Int count,
+    Int size,
+    [Type] v
+}
+
+func <T: Add> rampe(Int size, T begin) List<T> {
+    let ret = @List{ count = 0, size = size, v = @[#T size] }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = begin + i
+        i = i + 1
+    }
+    ret
+}
+
+func <T: Add, U> labelledSum(List<T> lst, U label) U {
+    label
+}
+
+func main() Int {
+    let ints = rampe(4, 10)
+    let r = labelledSum(ints, false)
+    println(r)
+    1
+}

@@ -1,0 +1,10 @@
+func safeDivide(Int a, Int b) Int {
+    a / b ? err 0
+}
+
+func main() Int {
+    println(safeDivide(10, 2))
+    println(safeDivide(7, 0))
+    println(safeDivide(100, 4))
+    1
+}

@@ -1,0 +1,50 @@
+struct <Type>List {
+    Int count,
+    Int size,
+    [Type] v
+}
+
+func list(Int size, Int default) List<Int> {
+    let ret = @List{
+        count = 0,
+        size = size,
+        v = @[#Int size]
+    }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = default
+        i = i + 1
+    }
+    ret
+}
+
+func <T: Add> rampe(Int size, T begin) List<T> {
+    let ret = @List{
+        count = 0,
+        size = size,
+        v = @[#T size]
+    }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = begin + i
+        i = i + 1
+    }
+    ret
+}
+
+func <T> getFirst(List<T> items) T {
+    items.v[0]
+}
+
+func <T> getLast(List<T> items, Int idx) T {
+    items.v[idx]
+}
+
+func main() Int {
+    let ints = rampe(5, 10)
+    println(getFirst(ints))
+    println(getLast(ints, 4))
+    let floats = rampe(3, 1.0)
+    println(getFirst(floats))
+    1
+}

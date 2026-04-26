@@ -1,0 +1,8 @@
+
+import("math.bbc") as math
+
+func main() Int {
+    println(math.square(6))
+    println(math.abs(0 - 7))
+    1
+}

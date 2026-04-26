@@ -1,0 +1,14 @@
+struct <A, B>Pair {
+    A first,
+    B second
+}
+func <A, B> makePair(A a, B b) Pair<A, B> {
+    @Pair{ first = a, second = b }
+}
+func <A, B> getFirst(Pair<A, B> p) A { p.first }
+
+func main() Int {
+    let p = makePair(1, true)
+    println(getFirst(p))
+    1
+}

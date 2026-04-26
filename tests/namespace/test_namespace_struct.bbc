@@ -1,0 +1,9 @@
+
+import("math.bbc") as math
+
+func main() Int {
+    let p = math.makePoint(3, 4)
+    println(p.x)
+    println(p.y)
+    1
+}

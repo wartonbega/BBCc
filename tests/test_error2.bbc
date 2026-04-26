@@ -1,0 +1,15 @@
+struct <A, B>Pair {
+    A first,
+    B second
+}
+func <A, B> makePair(A a, B b) Pair<A, B> {
+    @Pair{ first = a, second = b }
+}
+func <T, X> addBoth(Pair<T, X> p, T wrongType) Pair<T, X> {
+    @Pair{ first = p.first + wrongType, second = p.second }
+}
+func main() Int {
+    let p = makePair(1, true)
+    let q = addBoth(p, 'c')
+    1
+}

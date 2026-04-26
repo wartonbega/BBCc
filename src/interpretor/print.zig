@@ -22,6 +22,9 @@ pub fn print(val: Values.Value) void {
         .Function => |f| {
             stdout.print("Function({s})", .{f.func.name}) catch {};
         },
+        .BuiltinFunction => |name| {
+            stdout.print("BuiltinFunction({s})", .{name}) catch {};
+        },
         .Error => |e| {
             stdout.print("ErrorUnion: {s} at {s}", .{ e.message, e.reference.toString() }) catch {};
         },
@@ -30,6 +33,21 @@ pub fn print(val: Values.Value) void {
         },
         .String => |s| {
             stdout.print("{s}", .{s.*.content.items}) catch {};
+        },
+        .Buffer => |b| {
+            _ = stdout.write("[") catch {};
+            for (b.content, 0..) |o, i| {
+                if (o) |v| {
+                    print(v);
+                } else _ = stdout.write("?") catch {};
+
+                if (i != b.content.len - 1)
+                    stdout.print(", ", .{}) catch {};
+            }
+            _ = stdout.write("]") catch {};
+        },
+        .Namespace => |ns| {
+            stdout.print("Namespace({s})", .{ns.name}) catch {};
         },
     }
 }

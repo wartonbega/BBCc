@@ -12,6 +12,7 @@ const x86 = @import("codegen/x86.zig");
 const Compiler = @import("codegen/compiler.zig").Compiler;
 
 const std = @import("std");
+const Io = std.io;
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

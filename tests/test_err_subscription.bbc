@@ -1,0 +1,41 @@
+struct <Type> List {
+    Int count,
+    Int size,
+    [Type] v
+}
+
+trait Subscription(Type<SubType>) {
+    func index(Int i) !SubType
+}
+
+implement Subscription: List<Type> {
+    func index(Int idx) !Type {
+        self.v[idx]
+    }
+}
+
+func makeList(Int n) List<Int> {
+    let lst = @List{
+        count = 0,
+        size = n,
+        v = @[#Int n]
+    }
+    let i = 0
+    while (i < n) {
+        lst.v[i] = i * 10
+        i = i + 1
+    }
+    lst
+}
+
+func <Type: Add> safeGet(List<Type> lst, Int i, Type fallback) Type {
+    lst[i] ? err fallback
+}
+
+func main() !Int {
+    let lst = makeList(3)
+    println(safeGet(lst, 0, 0))
+    println(safeGet(lst, 2, 0))
+    println(safeGet(lst, 9, 0))
+    1
+}

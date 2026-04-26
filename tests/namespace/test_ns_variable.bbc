@@ -1,0 +1,7 @@
+import("math.bbc") as math
+
+func main() Int {
+    let m = math
+    println(m.square(4))
+    1
+}

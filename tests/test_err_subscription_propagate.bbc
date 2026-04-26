@@ -1,0 +1,43 @@
+struct <Type> List {
+    Int count,
+    Int size,
+    [Type] v
+}
+
+trait Subscription(Type<SubType>) {
+    func index(Int i) !SubType
+}
+
+implement Subscription: List<Type> {
+    func index(Int idx) !Type {
+        self.v[idx]
+    }
+}
+
+func makeList(Int n) List<Int> {
+    let lst = @List{
+        count = 0,
+        size = n,
+        v = @[#Int n]
+    }
+    let i = 0
+    while (i < n) {
+        lst.v[i] = i + 1
+        i = i + 1
+    }
+    lst
+}
+
+func firstPlusSecond(List<Int> lst) !Int {
+    let a = lst[0] ? err 0
+    let b = lst[1] ? err 0
+    a + b
+}
+
+func main() !Int {
+    let full = makeList(3)
+    let small = makeList(1)
+    println(firstPlusSecond(full))
+    println(firstPlusSecond(small))
+    1
+}

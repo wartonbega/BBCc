@@ -1,0 +1,29 @@
+struct <Type> Bag {
+    Int size,
+    [Type] items
+}
+
+func <Type> makeBag(Int size, Type fill) Bag<Type> {
+    let b = @Bag{
+        size = size,
+        items = @[#Type size]
+    }
+    let i = 0
+    while (i < size) {
+        b.items[i] = fill
+        i = i + 1
+    }
+    b
+}
+
+func <Type: Add> safeGet(Bag<Type> b, Int i, Type fallback) Type {
+    b.items[i] ? err fallback
+}
+
+func main() !Int {
+    let b = makeBag(3, 42)
+    println(safeGet(b, 0, 0))
+    println(safeGet(b, 2, 0))
+    println(safeGet(b, 10, 0))
+    1
+}

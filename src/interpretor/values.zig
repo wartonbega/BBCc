@@ -17,6 +17,54 @@ pub const StringObj = struct {
     }
 };
 
+pub const BufferObj = struct {
+    content: []?Value,
+    buffAllocator: std.mem.Allocator, // The allocator for the buffer
+    size: usize,
+    references: usize,
+
+    pub fn deleteIfNoRef(self: *BufferObj, allocator: std.mem.Allocator) void {
+        if (self.references == 0) {
+            for (self.content) |v| {
+                if (v) |value_sure|
+                    value_sure.decrementReference(allocator);
+            }
+            self.buffAllocator.free(self.content);
+            allocator.destroy(self);
+        }
+    }
+
+    pub fn setElement(self: *BufferObj, idx: usize, value: Value, allocator: std.mem.Allocator) void {
+        value.incrementReference();
+        if (self.content[idx]) |v| { // On created with alloc, the memory is set to undefined
+            v.decrementReference(allocator);
+        }
+        self.content[idx] = value;
+    }
+};
+
+/// A first-class namespace value produced by `import("file") as ns`.
+/// Members map short names -> functions or sub-NamespaceObj values.
+pub const NamespaceObj = struct {
+    name: []const u8,
+    members: std.StringHashMap(Value),
+    references: usize,
+
+    pub fn deleteIfNoRef(self: *NamespaceObj, allocator: std.mem.Allocator) void {
+        if (self.references == 0) {
+            var it = self.members.iterator();
+            while (it.next()) |m| m.value_ptr.decrementReference(allocator);
+            self.members.deinit();
+            allocator.free(self.name);
+            allocator.destroy(self);
+        }
+    }
+
+    pub fn getMember(self: *const NamespaceObj, name: []const u8) ?Value {
+        return self.members.get(name);
+    }
+};
+
 pub const Object = struct {
     name: []const u8,
     habitants: std.hash_map.StringHashMap(Value),
@@ -35,10 +83,9 @@ pub const Object = struct {
 
     pub fn setHabitant(self: *Object, name: []const u8, value: Value, allocator: std.mem.Allocator) void {
         value.incrementReference();
-        if (self.habitants.get(name) != null) {
-            self.habitants.get(name).?.decrementReference(allocator);
+        if (self.habitants.fetchPut(name, value) catch null) |old_entry| {
+            old_entry.value.decrementReference(allocator);
         }
-        self.habitants.put(name, value) catch {};
     }
 };
 
@@ -49,11 +96,14 @@ pub const Value = union(enum) {
     Null: void,
     Char: u8,
     String: *StringObj,
+    Buffer: *BufferObj,
     Function: struct {
         func: *ast.funcDef,
         parentObj: ?*Object,
     },
+    BuiltinFunction: []const u8,
     Object: *Object,
+    Namespace: *NamespaceObj,
     Error: struct {
         reference: Parser.Location,
         message: []const u8,
@@ -61,6 +111,10 @@ pub const Value = union(enum) {
 
     pub fn getHabitant(self: *const Value, name: []const u8) Value {
         switch (self.*) {
+            .Namespace => |ns| {
+                if (ns.getMember(name)) |v| return v;
+                return .Null;
+            },
             .Object => |o| {
                 if (std.mem.eql(u8, "_count", name))
                     return Value{ .Int = @intCast(o.references) };
@@ -90,6 +144,12 @@ pub const Value = union(enum) {
                 if (std.mem.eql(u8, "_size", name))
                     return Value{ .Int = @intCast(s.content.items.len) };
             },
+            .Buffer => |b| {
+                if (std.mem.eql(u8, "_count", name))
+                    return Value{ .Int = @intCast(b.references) };
+                if (std.mem.eql(u8, "_size", name))
+                    return Value{ .Int = @intCast(b.content.len) };
+            },
             else => unreachable,
         }
         return .Null;
@@ -100,8 +160,14 @@ pub const Value = union(enum) {
             .Object => |o| {
                 @constCast(o).references -= 1;
             },
+            .Namespace => |ns| {
+                @constCast(ns).references -= 1;
+            },
             .String => |s| {
                 @constCast(s).references -= 1;
+            },
+            .Buffer => |b| {
+                @constCast(b).references -= 1;
             },
             .Function => |f| {
                 if (f.parentObj) |p| {
@@ -109,6 +175,7 @@ pub const Value = union(enum) {
                     s.decrementReferenceNoCheck();
                 }
             },
+            .BuiltinFunction => {},
             else => {},
         }
     }
@@ -119,9 +186,17 @@ pub const Value = union(enum) {
                 @constCast(o).references -= 1;
                 o.deleteIfNoRef(allocator);
             },
+            .Namespace => |ns| {
+                @constCast(ns).references -= 1;
+                ns.deleteIfNoRef(allocator);
+            },
             .String => |s| {
                 @constCast(s).references -= 1;
                 s.deleteIfNoRef(allocator);
+            },
+            .Buffer => |b| {
+                @constCast(b).references -= 1;
+                b.deleteIfNoRef(allocator);
             },
             .Function => |f| {
                 if (f.parentObj) |p| {
@@ -138,8 +213,14 @@ pub const Value = union(enum) {
             .Object => |o| {
                 @constCast(o).references += 1;
             },
+            .Namespace => |ns| {
+                @constCast(ns).references += 1;
+            },
             .String => |s| {
                 @constCast(s).references += 1;
+            },
+            .Buffer => |b| {
+                @constCast(b).references += 1;
             },
             .Function => |f| {
                 if (f.parentObj) |p| {
@@ -153,15 +234,11 @@ pub const Value = union(enum) {
 
     pub fn getReference(self: *const Value) usize {
         switch (self.*) {
-            .Object => |o| {
-                return o.references;
-            },
-            .String => |s| {
-                return s.references;
-            },
-            else => {
-                return 69;
-            },
+            .Object => |o| return o.references,
+            .Namespace => |ns| return ns.references,
+            .String => |s| return s.references,
+            .Buffer => |b| return b.references,
+            else => return 69,
         }
     }
 
@@ -170,8 +247,14 @@ pub const Value = union(enum) {
             .Object => |o| {
                 o.deleteIfNoRef(allocator);
             },
+            .Namespace => |ns| {
+                ns.deleteIfNoRef(allocator);
+            },
             .String => |s| {
                 s.deleteIfNoRef(allocator);
+            },
+            .Buffer => |b| {
+                b.deleteIfNoRef(allocator);
             },
             .Function => |f| {
                 if (f.parentObj) |p| {
@@ -192,8 +275,11 @@ pub const Value = union(enum) {
             .Char => "Char",
             .String => "String",
             .Function => "Function",
+            .BuiltinFunction => "BuiltinFunction",
             .Object => "Object",
+            .Buffer => "Buffer",
             .Error => "Error",
+            .Namespace => "Namespace",
         };
     }
 };

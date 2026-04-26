@@ -8,3 +8,7 @@ struct Toto {
 func test (Int x) Int {
     x * x
 }
+
+trait Managable(Object) {
+    func getCount() Int
+}

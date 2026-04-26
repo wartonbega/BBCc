@@ -1,41 +1,91 @@
-import("import_file.bbc") as import_file
 
-
-
-trait Stringable(Type) {
-    func toString () String
-
-    func with (Type other) String
+struct <Type> List {
+    Int count,
+    Int size,
+    [Type] v
 }
 
-implement Stringable: import_file.Toto {
-    func toString() String {
-        "(a, b)"
+func list(Int size, Int default) List<Int> {
+    let ret = @List{
+        count = 0,
+        size = size,
+        v = @[#Int size]
     }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = default
+        i = i + 1
+    }
+    ret
+}
 
-    func with (import_file.Toto other) String {
-        "(a, b)(a', b')"
+func <Type: Add> rampe(Int size, Type begin) List<Type> {
+    let ret = @List{
+        count = 0,
+        size = size,
+        v = @[#Type size]
     }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = begin + i
+        i = i + 1
+    }
+    ret
+}
+
+trait Iter(Type<Retype>) {
+    func next() Retype
+
+    func isLast() Bool
 }
 
 
-func <Type: Stringable, Type2: Add> test (Type x, Type2 y) Void {
-    println(x.toString())
-    println(y)
+implement Iter: List<Type> {
+    func next() Type {
+        self.count = self.count + 1
+        self.v[self.count - 1]
+    }
+
+    func isLast() Bool {
+        self.count == self.size
+    }
+}
+
+trait Subscription(Type<SubType>) {
+    func index(Int i) !SubType
+}
+
+implement Subscription: List<Type> {
+    func index(Int idx) !Type {
+        self.v[idx]
+    }
+}
+
+trait IndexSet(Type<SubType>) {
+    func set(Int i, SubType value) !Void
+}
+
+implement IndexSet: List<Type> {
+    func set(Int i, Type value) !Void {
+        self.v[i] = value
+    }
+}
+
+func <Type: Add> getFirst(List<Type> items) Type {
+    items.v[0]
 }
 
 
-func main() Int {
-    let first = @import_file.Toto{
-        a = 1,
-        b = 2
+func main() !Int {
+    let lst = rampe(3, '0')
+    let a = lst[0]
+    println(lst[0])
+    println(lst[1])
+    println(lst[2])
+
+    for c: rampe(3, 'a') {
+        println(c)
     }
 
-    let second = @import_file.Toto{
-        a = 3,
-        b = 4
-    }
-    test(first, 1)
-    println(import_file.test(8))
     1
 }

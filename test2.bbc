@@ -1,0 +1,61 @@
+struct <Type> StringIterator {
+    Int current,
+    String content,
+    Type param,
+}
+
+trait Iter(Type<Retype>) {
+    func next() Retype
+
+    func isLast() Bool
+}
+
+implement Iter: StringIterator<Type> {
+    func next() Type {
+        let idx = self.current
+        self.current = self.current + 1
+        self.content[idx]
+    }
+
+    func isLast() Bool {
+        self.current == self.content._size
+    }
+}
+
+
+func stringIterator(String arg) StringIterator<Char> {
+    @StringIterator{
+        current = 0,
+        content = arg,
+        param = '0'
+    }
+}
+
+func reduceDoubleSpace(String s) String {
+    let ret = ""
+    let accu = false
+    for c: stringIterator(s) {
+
+        if c == ' ' && not accu 
+            ret = ret + c
+
+        if c == ' ' 
+            accu = true 
+        else {
+            accu = false
+            ret = ret + c
+        }
+    }
+    ret
+}
+
+func main() Int {
+    let a = read("test.bbc")
+    let b = reduceDoubleSpace(a)
+    for c: stringIterator(b) 
+        if c != '\n' && c != '\t' && c != '\r'
+            print(c)
+    
+    println('')
+    1
+}

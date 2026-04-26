@@ -1,0 +1,30 @@
+struct <T>Pair {
+    T a,
+    T b
+}
+
+func <T> makePair(T x, T y) Pair<T> {
+    @Pair{
+        a = x,
+        b = y
+    }
+}
+
+func <T> getA(Pair<T> p) T {
+    p.a
+}
+
+func <T> swapA(Pair<T> p, T newA) Pair<T> {
+    @Pair{
+        a = newA,
+        b = p.b
+    }
+}
+
+func main() Int {
+    let p = makePair(3, 7)
+    println(getA(p))
+    let p2 = swapA(p, 99)
+    println(getA(p2))
+    1
+}

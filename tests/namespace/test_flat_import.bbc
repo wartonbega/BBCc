@@ -1,0 +1,13 @@
+
+import("math.bbc")
+
+func main() Int {
+    let p1 = makePoint(3, 4)
+    let p2 = makePoint(1, 2)
+    let p3 = addPoints(p1, p2)
+    println(p3.x)
+    println(p3.y)
+    println(square(5))
+    println(dot(p1, p2))
+    1
+}

@@ -1,0 +1,72 @@
+// ─── 1. Multi-param struct ─────────────────────────────────────────────────
+struct <A, B>Pair {
+    A first,
+    B second
+}
+
+// ─── 2. Function with two independent type params ─────────────────────────
+func <A, B> makePair(A a, B b) Pair<A, B> {
+    @Pair{
+        first = a,
+        second = b
+    }
+}
+
+// ─── 3. Extractors using a generic Pair param ─────────────────────────────
+func <A, B> getFirst(Pair<A, B> p) A {
+    p.first
+}
+
+func <A, B> getSecond(Pair<A, B> p) B {
+    p.second
+}
+
+// ─── 4. Swap ──────────────────────────────────────────────────────────────
+func <A, B> swap(Pair<A, B> p) Pair<B, A> {
+    @Pair{
+        first = p.second,
+        second = p.first
+    }
+}
+
+// ─── 5. Struct with three type params ─────────────────────────────────────
+struct <A, B, C>Triple {
+    A x,
+    B y,
+    C z
+}
+
+func <A, B, C> makeTriple(A a, B b, C c) Triple<A, B, C> {
+    @Triple{
+        x = a,
+        y = b,
+        z = c
+    }
+}
+
+func <A, B, C> getZ(Triple<A, B, C> t) C {
+    t.z
+}
+
+func main() Int {
+    // Pair<Int, Bool>
+    let p = makePair(42, true)
+    println(getFirst(p))
+    println(getSecond(p))
+
+    // Pair<Char, Int>
+    let q = makePair('x', 99)
+    println(getFirst(q))
+    println(getSecond(q))
+
+    // swap: Pair<Char, Int> → Pair<Int, Char>
+    let s = swap(q)
+    println(getFirst(s))
+    println(getSecond(s))
+
+    // Triple<Int, Bool, Char>
+    let t = makeTriple(7, false, 'z')
+    println(getZ(t))
+
+    1
+}

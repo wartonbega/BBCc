@@ -1,0 +1,35 @@
+
+struct Point {
+    Int x,
+    Int y
+}
+
+func makePoint(Int x, Int y) Point {
+    @Point{
+        x = x,
+        y = y
+    }
+}
+
+func addPoints(Point a, Point b) Point {
+    @Point{
+        x = a.x + b.x,
+        y = a.y + b.y
+    }
+}
+
+func dot(Point a, Point b) Int {
+    a.x * b.x + a.y * b.y
+}
+
+func square(Int n) Int {
+    n * n
+}
+
+func abs(Int n) Int {
+    if (n < 0) {
+        0 - n
+    } else {
+        n
+    }
+}

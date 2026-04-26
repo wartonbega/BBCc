@@ -1,0 +1,7 @@
+import("math_wrapper.bbc") as mathw
+
+
+func main() Int {
+    println(mathw.math.square(6))
+    1
+}

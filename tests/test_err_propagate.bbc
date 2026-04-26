@@ -1,0 +1,16 @@
+func firstOf([Int] buf) !Int {
+    buf[0]
+}
+
+func doubleFirst([Int] buf) !Int {
+    let x = firstOf(buf) ? err 0
+    x + x
+}
+
+func main() Int {
+    let full = @[5, 10, 15]
+    let empty = @[#Int 0]
+    println(doubleFirst(full))
+    println(doubleFirst(empty))
+    1
+}

@@ -1,0 +1,76 @@
+struct <A, B>Pair {
+    A first,
+    B second
+}
+
+func <A, B> makePair(A a, B b) Pair<A, B> {
+    @Pair{ first = a, second = b }
+}
+
+// ─── Mixed: direct T param + generic struct param ─────────────────────────
+func <A, B> replaceFirst(Pair<A, B> p, A newA) Pair<A, B> {
+    @Pair{ first = newA, second = p.second }
+}
+
+// ─── Two generic struct params, same base struct ──────────────────────────
+func <A, B, C> chain(Pair<A, B> p1, Pair<B, C> p2) Pair<A, C> {
+    @Pair{ first = p1.first, second = p2.second }
+}
+
+// ─── Consistency: same T inferred from both a T arg and a Pair<T,X> arg ──
+func <T, X> addToFirst(Pair<T, X> p, T val) Pair<T, X> {
+    @Pair{ first = p.first + val, second = p.second }
+}
+
+struct <Type>List {
+    Int count,
+    Int size,
+    [Type] v
+}
+
+func <T: Add> rampe(Int size, T begin) List<T> {
+    let ret = @List{ count = 0, size = size, v = @[#T size] }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = begin + i
+        i = i + 1
+    }
+    ret
+}
+
+func <T> getFirst(List<T> items) T {
+    items.v[0]
+}
+
+// ─── Generic struct inside a function that also has its own type param ────
+func <T, X> pairWithList(T val, X listHead) Pair<T, X> {
+    @Pair{ first = val, second = listHead }
+}
+
+func main() Int {
+    // replaceFirst
+    let p = makePair(1, true)
+    let p2 = replaceFirst(p, 99)
+    println(p2.first)
+    println(p2.second)
+
+    // chain: Pair<Int,Bool> + Pair<Bool,Char> → Pair<Int,Char>
+    let left  = makePair(10, false)
+    let right = makePair(false, 'z')
+    let c = chain(left, right)
+    println(c.first)
+    println(c.second)
+
+    // addToFirst: infer T=Int from both Pair<Int,Bool>.first and the direct arg 5
+    let base = makePair(20, true)
+    let added = addToFirst(base, 5)
+    println(added.first)
+
+    // pairWithList
+    let lst = rampe(3, 100)
+    let pw = pairWithList(42, getFirst(lst))
+    println(pw.first)
+    println(pw.second)
+
+    1
+}

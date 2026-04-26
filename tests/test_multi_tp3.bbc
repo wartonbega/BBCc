@@ -1,0 +1,34 @@
+struct <A, B>Pair {
+    A first,
+    B second
+}
+
+func <A, B> makePair(A a, B b) Pair<A, B> {
+    @Pair{ first = a, second = b }
+}
+
+func <A, B> getFirst(Pair<A, B> p) A { p.first }
+func <A, B> getSecond(Pair<A, B> p) B { p.second }
+
+// Re-use same generic function with different specializations in the same program
+func main() Int {
+    // Pair<Int, Bool>
+    let p1 = makePair(1, true)
+    // Pair<Bool, Char>
+    let p2 = makePair(false, 'q')
+    // Pair<Char, Int>
+    let p3 = makePair('a', 7)
+    // Pair<Int, Int>
+    let p4 = makePair(10, 20)
+
+    println(getFirst(p1))
+    println(getSecond(p1))
+    println(getFirst(p2))
+    println(getSecond(p2))
+    println(getFirst(p3))
+    println(getSecond(p3))
+    println(getFirst(p4))
+    println(getSecond(p4))
+
+    1
+}

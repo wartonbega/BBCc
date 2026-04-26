@@ -1,0 +1,16 @@
+func test2([Int] buff) Void {
+    let size = 3
+    let buff2 = @[#Int size]
+    let buff3 = @[1, 2, 3]
+    let element = buff3[0]
+    buff3[0] = 1
+    null
+}
+
+func main() !Int {
+    let b = @[#Int 5]
+    let c = @[1, 2, 3]
+    let x = c[0]
+    c[0] = 10
+    1
+}

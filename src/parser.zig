@@ -45,6 +45,8 @@ pub const TokenType = enum {
     PLUS,
     DIV,
     MINUS,
+    AND,
+    OR,
 
     DOT, // .
     COMMA, // ,
@@ -61,6 +63,7 @@ pub const TokenType = enum {
     ELSE,
     WHILE,
     FOR,
+    NOT_KW,
     STRUCT,
     ENUM,
     FREE,
@@ -80,6 +83,7 @@ pub const TokenType = enum {
     NULL_KW, // Null value
 
     COLON, // :
+    HASH, // #
 
     // Parenthesis-like
     O_PAR,
@@ -104,6 +108,8 @@ pub const TokenType = enum {
             .PLUS => "+",
             .DIV => "/",
             .MINUS => "-",
+            .AND => "&&",
+            .OR => "||",
             .DOT => ".",
             .COMMA => ",",
             .EXCLAM => "!",
@@ -117,6 +123,7 @@ pub const TokenType = enum {
             .ELSE => "else",
             .WHILE => "while",
             .FOR => "for",
+            .NOT_KW => "not",
             .STRUCT => "struct",
             .ENUM => "enum",
             .FREE => "free",
@@ -133,7 +140,8 @@ pub const TokenType = enum {
             .TRUE => "true",
             .FALSE => "false",
             .NULL_KW => "null",
-            .COLON => ";",
+            .COLON => ":",
+            .HASH => "#",
             .O_PAR => "(",
             .C_PAR => ")",
             .O_CUR => "{",
@@ -170,6 +178,9 @@ fn getIdentType(ident: []const u8) TokenType {
     }
     if (std.mem.eql(u8, ident, "for")) {
         return TokenType.FOR;
+    }
+    if (std.mem.eql(u8, ident, "not")) {
+        return TokenType.NOT_KW;
     }
     if (std.mem.eql(u8, ident, "true")) {
         return TokenType.TRUE;
@@ -240,7 +251,10 @@ fn isDirOperator(char: u8) bool {
         char == '>' or
         char == '!' or
         char == '@' or
-        char == '.';
+        char == '#' or
+        char == '.' or
+        char == '&' or
+        char == '|';
 }
 
 // The parser errors
@@ -398,10 +412,25 @@ fn parseIdentifier(reader: *Reader, allocator: std.mem.Allocator) !Token {
 
 fn parseChar(reader: *Reader) !Token {
     _ = reader.consume(1);
-    const char = reader.consume(1);
-    const closing_quote = reader.consume(1)[0];
-    if (closing_quote != '\'')
-        return parser_error.ExpectedToken;
+    var char = @constCast(reader.consume(1));
+    if (char[0] == '\\') {
+        const escape = reader.consume(1)[0];
+        if (escape == 'n') {
+            char[0] = '\n';
+        } else if (escape == 'r') {
+            char[0] = '\r';
+        } else if (escape == 't') {
+            char[0] = '\t';
+        }
+    }
+
+    if (char[0] == '\'') {
+        char[0] = 0;
+    } else {
+        const closing_quote = reader.consume(1)[0];
+        if (closing_quote != '\'')
+            return parser_error.ExpectedToken;
+    }
     return .{ .type = TokenType.CHARLIT, .value = char, .location = reader.getCurrentLocation() };
 }
 
@@ -439,6 +468,12 @@ fn parseOperator(reader: *Reader) !Token {
     } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), ">=")) {
         _ = reader.consume(2);
         return .{ .type = TokenType.MORE_THAN_EQ, .value = ">=", .location = reader.getCurrentLocation() };
+    } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "&&")) {
+        _ = reader.consume(2);
+        return .{ .type = TokenType.AND, .value = "&&", .location = reader.getCurrentLocation() };
+    } else if (reader.canPeek(2) and std.mem.eql(u8, reader.peek(2), "||")) {
+        _ = reader.consume(2);
+        return .{ .type = TokenType.OR, .value = "||", .location = reader.getCurrentLocation() };
     }
     // 1-char long operators :
     // + - / * . : ?
@@ -459,6 +494,7 @@ fn parseOperator(reader: *Reader) !Token {
             '<' => Token{ .type = TokenType.LESS_THAN, .value = "<", .location = reader.getCurrentLocation() },
             '!' => Token{ .type = TokenType.EXCLAM, .value = "!", .location = reader.getCurrentLocation() },
             '@' => Token{ .type = TokenType.AT, .value = "@", .location = reader.getCurrentLocation() },
+            '#' => Token{ .type = TokenType.HASH, .value = "#", .location = reader.getCurrentLocation() },
             else => parser_error.UnknownOperator,
         };
         _ = reader.consume(1);
@@ -508,7 +544,7 @@ pub fn parse(filename: []const u8, arena: *std.heap.ArenaAllocator) !std.ArrayLi
             try tokens.append(.{ .type = TokenType.C_PAR, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (char == '[') {
             try tokens.append(.{ .type = TokenType.O_BRA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
-        } else if (char == ')') {
+        } else if (char == ']') {
             try tokens.append(.{ .type = TokenType.C_BRA, .value = reader.consume(1), .location = reader.getCurrentLocation() });
         } else if (isWhiteSpace(char)) {
             _ = reader.consume(1);

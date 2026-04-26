@@ -1,0 +1,14 @@
+
+struct StrWrap {
+    Int len
+}
+
+func makeWrap(Int len) StrWrap {
+    @StrWrap{
+        len = len
+    }
+}
+
+func repeat(Int n) Int {
+    n + n
+}

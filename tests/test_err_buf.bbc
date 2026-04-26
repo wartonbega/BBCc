@@ -1,0 +1,11 @@
+func safeGet([Int] buf, Int i) Int {
+    buf[i] ? err 0
+}
+
+func main() !Int {
+    let buf = @[10, 20, 30]
+    println(safeGet(buf, 0))
+    println(safeGet(buf, 2))
+    println(safeGet(buf, 5))
+    1
+}
