@@ -50,51 +50,45 @@ fn setVariableRhsAssign(lhs: *Ast.Value, ctx: *Context, value: Value) !void {
 
 pub fn interpreteBinOp(binop: *Ast.binaryOperation, ctx: *Context) !Values.Value {
     const lhs_value = try interpreteValue(binop.lhs, ctx);
+
+    if (binop.operator == .And or binop.operator == .Or) {
+        return switch (binop.operator) {
+            .Or => {
+                if (lhs_value.Bool)
+                    return lhs_value;
+                const rhs_value = try interpreteValue(binop.rhs, ctx);
+                if (rhs_value.Bool)
+                    return rhs_value;
+                return Value{ .Bool = false };
+            },
+            .And => {
+                if (!lhs_value.Bool)
+                    return lhs_value;
+                const rhs_value = try interpreteValue(binop.rhs, ctx);
+                if (rhs_value.Bool)
+                    return rhs_value;
+                return Value{ .Bool = false };
+            },
+            else => unreachable,
+        };
+    }
     const rhs_value = try interpreteValue(binop.rhs, ctx);
     defer lhs_value.checkReference(ctx.heap);
     defer rhs_value.checkReference(ctx.heap);
-    switch (binop.operator) {
-        .Plus => {
-            return Values.Plus(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Minus => {
-            return Values.Minus(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Times => {
-            return Values.Times(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Div => {
-            return Values.Div(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Modulus => {
-            return Values.Modulus(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Lt => {
-            return Values.Lt(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Gt => {
-            return Values.Gt(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Le => {
-            return Values.Le(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Ge => {
-            return Values.Ge(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Equal => {
-            return Values.Equal(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .NotEqual => {
-            return Values.NotEqual(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .Or => {
-            return Values.Or(lhs_value, rhs_value, ctx, binop.reference);
-        },
-        .And => {
-            return Values.And(lhs_value, rhs_value, ctx, binop.reference);
-        },
-    }
-    return .{ .Null = {} };
+    return switch (binop.operator) {
+        .Plus => try Values.Plus(lhs_value, rhs_value, ctx, binop.reference),
+        .Minus => try Values.Minus(lhs_value, rhs_value, ctx, binop.reference),
+        .Times => try Values.Times(lhs_value, rhs_value, ctx, binop.reference),
+        .Div => try Values.Div(lhs_value, rhs_value, ctx, binop.reference),
+        .Modulus => try Values.Modulus(lhs_value, rhs_value, ctx, binop.reference),
+        .Lt => try Values.Lt(lhs_value, rhs_value, ctx, binop.reference),
+        .Gt => try Values.Gt(lhs_value, rhs_value, ctx, binop.reference),
+        .Le => try Values.Le(lhs_value, rhs_value, ctx, binop.reference),
+        .Ge => try Values.Ge(lhs_value, rhs_value, ctx, binop.reference),
+        .Equal => try Values.Equal(lhs_value, rhs_value, ctx, binop.reference),
+        .NotEqual => try Values.NotEqual(lhs_value, rhs_value, ctx, binop.reference),
+        else => unreachable,
+    };
 }
 
 pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError || std.mem.Allocator.Error)!Values.Value {
@@ -117,6 +111,7 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
             const ret = try interpreteValue(err_c.value, ctx);
             if (ret != .Error)
                 return ret;
+            ret.checkReference(ctx.heap);
             return try interpreteValue(err_c.scope, ctx);
         },
         .scope => |scope| {
@@ -335,26 +330,17 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
                 .Buffer => {
                     const buf_i: usize = @intCast(idx.Int);
                     if (buf_i >= buff.Buffer.size)
-                        return Values.Value{ .Error = .{
-                            .message = "Buffer index out of bounds",
-                            .reference = buff_idx.index.getReference(),
-                        } };
+                        return try Values.makeError(ctx.heap, buff_idx.index.getReference(), "Buffer index {d} out of bounds (size: {d})", .{ buf_i, buff.Buffer.size });
                     if (buff.Buffer.content[buf_i]) |ret| {
                         return ret;
                     } else {
-                        return Values.Value{ .Error = .{
-                            .message = "Undefined value in Buffer at this index",
-                            .reference = buff_idx.index.getReference(),
-                        } };
+                        return try Values.makeError(ctx.heap, buff_idx.index.getReference(), "Buffer index {d} has undefined value", .{buf_i});
                     }
                 },
                 .String => |s| {
                     const i: usize = @intCast(idx.Int);
                     if (i >= s.content.items.len)
-                        return Values.Value{ .Error = .{
-                            .message = "String index out of bounds",
-                            .reference = buff_idx.index.getReference(),
-                        } };
+                        return try Values.makeError(ctx.heap, buff_idx.index.getReference(), "String index {d} out of bounds (size: {d})", .{ i, s.content.items.len });
                     return Values.Value{ .Char = s.content.items[i] };
                 },
                 .Object => |_| {

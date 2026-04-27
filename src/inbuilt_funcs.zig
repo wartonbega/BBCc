@@ -10,6 +10,7 @@ pub const Func = struct {
     name: []const u8,
     params: []Param,
     return_type: []const u8,
+    return_type_has_error: bool,
     propagate_errors: bool,
 };
 
@@ -34,6 +35,9 @@ pub fn load(allocator: std.mem.Allocator) ![]Func {
         const propagate_errors = ret_str.len > 0 and ret_str[ret_str.len - 1] == '~';
         if (propagate_errors) ret_str = std.mem.trim(u8, ret_str[0 .. ret_str.len - 1], " \t");
 
+        const ret_type_has_error = ret_str.len > 0 and ret_str[0] == '!';
+        if (ret_type_has_error) ret_str = std.mem.trim(u8, ret_str[1..ret_str.len], " \t");
+
         var params = std.ArrayList(Param).init(allocator);
         if (params_str.len > 0) {
             var param_iter = std.mem.splitScalar(u8, params_str, ',');
@@ -56,6 +60,7 @@ pub fn load(allocator: std.mem.Allocator) ![]Func {
             .params = try params.toOwnedSlice(),
             .return_type = ret_str,
             .propagate_errors = propagate_errors,
+            .return_type_has_error = ret_type_has_error,
         });
     }
     return result.toOwnedSlice();

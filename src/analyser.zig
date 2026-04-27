@@ -476,7 +476,7 @@ fn analyseInbuiltFuncall(func_name: []const u8, func: *ast.Funcall, ctx: *Contex
     }
 
     const ret = try allocator.create(ast.Type);
-    ret.* = .{ .base = .{ .name = indef.return_type }, .err = if (indef.propagate_errors) has_error else false, .references = 0 };
+    ret.* = .{ .base = .{ .name = indef.return_type }, .err = indef.return_type_has_error or if (indef.propagate_errors) has_error else false, .references = 0 };
     return Types.Type{ .decided = ret };
 }
 

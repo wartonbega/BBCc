@@ -34,18 +34,16 @@ func stringIterator(String arg) StringIterator<Char> {
 func reduceDoubleSpace(String s) String {
     let ret = ""
     let accu = false
-    for c: stringIterator(s) {
-
-        if c == ' ' && not accu 
-            ret = ret + c
-
-        if c == ' ' 
+    for c: stringIterator(s) 
+        ret = if c == ' ' && not accu {
+            ret + c
+        } elif c == ' ' {
             accu = true 
-        else {
+            ret
+        } else {
             accu = false
-            ret = ret + c
+            ret + c
         }
-    }
     ret
 }
 
@@ -56,6 +54,7 @@ func main() Int {
         if c != '\n' && c != '\t' && c != '\r'
             print(c)
     
+    error("test")
     println('')
     1
 }

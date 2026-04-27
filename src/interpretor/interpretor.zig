@@ -8,6 +8,8 @@ const Values = @import("../interpretor/values.zig");
 const ValueInterpretor = @import("valueInterpretor.zig");
 const InbuiltFuncs = @import("../inbuilt_funcs.zig");
 
+const debug_gc = @import("build_options").debug_gc;
+
 pub const ContextualError = error{ bbcContextualError, UnknownFunction };
 
 pub const Context = struct {
@@ -57,15 +59,27 @@ pub const Context = struct {
 
     pub fn setVariable(self: *Context, name: []const u8, value: Values.Value) !void {
         if (self.parent) |parent| {
-            if (parent.variableExist(name)) {
-                try parent.setVariable(name, value);
+            if (try parent.setVariableOpt(name, value))
                 return;
-            }
         }
         value.incrementReference();
         if (try self.variables.fetchPut(name, value)) |old_entry| {
             old_entry.value.decrementReference(self.heap);
         }
+    }
+
+    pub fn setVariableOpt(self: *Context, name: []const u8, value: Values.Value) !bool {
+        if (self.variables.contains(name)) {
+            value.incrementReference();
+            if (try self.variables.fetchPut(name, value)) |old_entry| {
+                old_entry.value.decrementReference(self.heap);
+            }
+            return true;
+        }
+        if (self.parent) |parent| {
+            return parent.setVariableOpt(name, value);
+        }
+        return false;
     }
 
     pub fn variableExist(self: *Context, name: []const u8) bool {
@@ -139,9 +153,18 @@ pub fn interpreteFunction(func: *Ast.funcDef, args: std.ArrayList(Values.Value),
 }
 
 pub fn interpreteProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: std.mem.Allocator) !void {
-    var heap = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = heap.deinit();
-    const heapAllocator = heap.allocator();
+    if (comptime debug_gc) {
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        return interpreteProgramImpl(ast, cctx, alloc, gpa.allocator());
+    } else {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        return interpreteProgramImpl(ast, cctx, alloc, arena.allocator());
+    }
+}
+
+fn interpreteProgramImpl(ast: *Ast.Program, cctx: *analyser.Context, alloc: std.mem.Allocator, heapAllocator: std.mem.Allocator) !void {
     var ctx = Context.init(cctx, heapAllocator);
 
     _ = ast;
@@ -249,4 +272,5 @@ pub fn interpreteProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: std.
 
     std.debug.print("---- Return value of programme ----\n", .{});
     Print.println(ret);
+    ret.checkReference(heapAllocator);
 }

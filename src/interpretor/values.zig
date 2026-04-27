@@ -3,6 +3,8 @@ const ast = @import("../ast.zig");
 const interpretor = @import("interpretor.zig");
 const Parser = @import("../parser.zig");
 
+const Objects = @import("objects.zig");
+
 const Context = interpretor.Context;
 
 pub const StringObj = struct {
@@ -43,6 +45,19 @@ pub const BufferObj = struct {
     }
 };
 
+pub const ErrorObj = struct {
+    message: []u8,
+    reference: Parser.Location,
+    references: usize,
+
+    pub fn deleteIfNoRef(self: *ErrorObj, allocator: std.mem.Allocator) void {
+        if (self.references == 0) {
+            allocator.free(self.message);
+            allocator.destroy(self);
+        }
+    }
+};
+
 /// A first-class namespace value produced by `import("file") as ns`.
 /// Members map short names -> functions or sub-NamespaceObj values.
 pub const NamespaceObj = struct {
@@ -65,29 +80,7 @@ pub const NamespaceObj = struct {
     }
 };
 
-pub const Object = struct {
-    name: []const u8,
-    habitants: std.hash_map.StringHashMap(Value),
-    references: usize,
-
-    pub fn deleteIfNoRef(self: *Object, allocator: std.mem.Allocator) void {
-        if (self.references == 0) {
-            var it = self.habitants.iterator();
-            while (it.next()) |hab| {
-                hab.value_ptr.decrementReference(allocator);
-            }
-            self.habitants.deinit();
-            allocator.destroy(self);
-        }
-    }
-
-    pub fn setHabitant(self: *Object, name: []const u8, value: Value, allocator: std.mem.Allocator) void {
-        value.incrementReference();
-        if (self.habitants.fetchPut(name, value) catch null) |old_entry| {
-            old_entry.value.decrementReference(allocator);
-        }
-    }
-};
+pub const Object = Objects.Object;
 
 pub const Value = union(enum) {
     Int: i32,
@@ -104,10 +97,7 @@ pub const Value = union(enum) {
     BuiltinFunction: []const u8,
     Object: *Object,
     Namespace: *NamespaceObj,
-    Error: struct {
-        reference: Parser.Location,
-        message: []const u8,
-    },
+    Error: *ErrorObj,
 
     pub fn getHabitant(self: *const Value, name: []const u8) Value {
         switch (self.*) {
@@ -116,27 +106,7 @@ pub const Value = union(enum) {
                 return .Null;
             },
             .Object => |o| {
-                if (std.mem.eql(u8, "_count", name))
-                    return Value{ .Int = @intCast(o.references) };
-                if (std.mem.eql(u8, "_size", name))
-                    return Value{ .Int = @intCast(o.habitants.count()) };
-
-                if (o.habitants.get(name)) |val| {
-                    // Si c'est une fonction et qu'elle n'a pas de parent,
-                    // c'est une méthode de cet objet : on fait le lien (binding) maintenant.
-                    if (val == .Function and val.Function.parentObj == null) {
-                        const ret = Value{
-                            .Function = .{
-                                .func = val.Function.func,
-                                .parentObj = o, // On attache l'objet "self" dynamiquement
-                            },
-                        };
-                        ret.incrementReference();
-                        return ret;
-                    }
-                    return val;
-                }
-                return o.habitants.get(name).?;
+                return o.getHabitant(name);
             },
             .String => |s| {
                 if (std.mem.eql(u8, "_count", name))
@@ -169,6 +139,9 @@ pub const Value = union(enum) {
             .Buffer => |b| {
                 @constCast(b).references -= 1;
             },
+            .Error => |e| {
+                @constCast(e).references -= 1;
+            },
             .Function => |f| {
                 if (f.parentObj) |p| {
                     var s = Value{ .Object = p };
@@ -198,6 +171,10 @@ pub const Value = union(enum) {
                 @constCast(b).references -= 1;
                 b.deleteIfNoRef(allocator);
             },
+            .Error => |e| {
+                @constCast(e).references -= 1;
+                e.deleteIfNoRef(allocator);
+            },
             .Function => |f| {
                 if (f.parentObj) |p| {
                     var s = Value{ .Object = p };
@@ -221,6 +198,9 @@ pub const Value = union(enum) {
             },
             .Buffer => |b| {
                 @constCast(b).references += 1;
+            },
+            .Error => |e| {
+                @constCast(e).references += 1;
             },
             .Function => |f| {
                 if (f.parentObj) |p| {
@@ -256,6 +236,9 @@ pub const Value = union(enum) {
             .Buffer => |b| {
                 b.deleteIfNoRef(allocator);
             },
+            .Error => |e| {
+                e.deleteIfNoRef(allocator);
+            },
             .Function => |f| {
                 if (f.parentObj) |p| {
                     var s = Value{ .Object = p };
@@ -288,280 +271,282 @@ fn floatFromInt(i: i32) f64 {
     return @as(f64, @floatFromInt(i));
 }
 
-pub fn Plus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
+pub fn makeError(alloc: std.mem.Allocator, reference: Parser.Location, comptime fmt: []const u8, args: anytype) !Value {
+    const message = try std.fmt.allocPrint(alloc, fmt, args);
+    const obj = try alloc.create(ErrorObj);
+    obj.* = .{ .message = message, .reference = reference, .references = 0 };
+    return Value{ .Error = obj };
+}
+
+pub fn Plus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Int = lhs + rhs },
             .Char => |rhs| Value{ .Int = lhs + @as(i32, rhs) },
             .Bool => |rhs| Value{ .Int = lhs + if (rhs) @as(i32, 1) else @as(i32, 0) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to Int" } },
+            else => try makeError(ctx.heap, reference, "Cannot add {s} to Int", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Int => |rhs| Value{ .Char = @intCast(@as(i32, lhs) + rhs) },
             .Char => |rhs| Value{ .Char = lhs +% rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to Char" } },
+            else => try makeError(ctx.heap, reference, "Cannot add {s} to Char", .{other.getType()}),
         },
         .String => |lhs| switch (other) {
             .Char => |rhs| blk: {
+                if (rhs == 0) {
+                    return Value{ .String = lhs };
+                }
+                if (lhs.references == 1) { // "I'm the single owner"
+                    try lhs.content.append(rhs);
+                    break :blk Value{ .String = lhs };
+                }
                 var new_content = std.ArrayList(u8).init(ctx.heap);
-                new_content.appendSlice(lhs.content.items) catch break :blk Value{ .Error = .{ .reference = reference, .message = "Out of memory" } };
-                new_content.append(rhs) catch break :blk Value{ .Error = .{ .reference = reference, .message = "Out of memory" } };
-                const new_str = ctx.heap.create(StringObj) catch break :blk Value{ .Error = .{ .reference = reference, .message = "Out of memory" } };
+                try new_content.appendSlice(lhs.content.items);
+                try new_content.append(rhs);
+                const new_str = try ctx.heap.create(StringObj);
                 new_str.* = .{ .content = new_content, .references = 0 };
-                break :blk Value{ .String = new_str };
+                break :blk Value{ .String = lhs };
             },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to String" } },
+            else => try makeError(ctx.heap, reference, "Cannot add {s} to String", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Float = lhs + rhs },
             .Int => |rhs| Value{ .Float = lhs + floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot add this type to Float" } },
+            else => try makeError(ctx.heap, reference, "Cannot add {s} to Float", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use + on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use + on {s}", .{self.getType()}),
     };
 }
 
-pub fn Minus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Minus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Int = lhs - rhs },
             .Char => |rhs| Value{ .Int = lhs - @as(i32, rhs) },
             .Bool => |rhs| Value{ .Int = lhs - if (rhs) @as(i32, 1) else @as(i32, 0) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract this type from Int" } },
+            else => try makeError(ctx.heap, reference, "Cannot subtract {s} from Int", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Int => |rhs| Value{ .Char = @intCast(@as(i32, lhs) - rhs) },
             .Char => |rhs| Value{ .Char = lhs -% rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract this type from Char" } },
+            else => try makeError(ctx.heap, reference, "Cannot subtract {s} from Char", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Float = lhs - rhs },
             .Int => |rhs| Value{ .Float = lhs - floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot subtract this type from Float" } },
+            else => try makeError(ctx.heap, reference, "Cannot subtract {s} from Float", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use - on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use - on {s}", .{self.getType()}),
     };
 }
 
-pub fn Times(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Times(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Int = lhs * rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot multiply this type with Int" } },
+            else => try makeError(ctx.heap, reference, "Cannot multiply Int by {s}", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Float = lhs * rhs },
             .Int => |rhs| Value{ .Float = lhs * floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot multiply this type with Float" } },
+            else => try makeError(ctx.heap, reference, "Cannot multiply Float by {s}", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use * on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use * on {s}", .{self.getType()}),
     };
 }
 
-pub fn Div(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Div(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
-            .Int => |rhs| if (rhs != 0) Value{ .Int = @divFloor(lhs, rhs) } else Value{ .Error = .{ .reference = reference, .message = "Cannot divide by zero" } },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot divide Int by this type" } },
+            .Int => |rhs| if (rhs != 0) Value{ .Int = @divFloor(lhs, rhs) } else try makeError(ctx.heap, reference, "Cannot divide {d} by zero", .{lhs}),
+            else => try makeError(ctx.heap, reference, "Cannot divide Int by {s}", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Float = lhs / rhs },
             .Int => |rhs| Value{ .Float = lhs / floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot divide Float by this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot divide Float by {s}", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use / on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use / on {s}", .{self.getType()}),
     };
 }
 
-pub fn Modulus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Modulus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
-            .Int => |rhs| if (rhs != 0) Value{ .Int = @mod(lhs, rhs) } else Value{ .Error = .{ .reference = reference, .message = "Cannot modulo by zero" } },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot modulo Int by this type" } },
+            .Int => |rhs| if (rhs != 0) Value{ .Int = @mod(lhs, rhs) } else try makeError(ctx.heap, reference, "Cannot modulo {d} by zero", .{lhs}),
+            else => try makeError(ctx.heap, reference, "Cannot modulo Int by {s}", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Float = @mod(lhs, rhs) },
             .Int => |rhs| Value{ .Float = @mod(lhs, floatFromInt(rhs)) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot modulo Float by this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot modulo Float by {s}", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use % on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use %% on {s}", .{self.getType()}),
     };
 }
 
-pub fn Lt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Lt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Bool = lhs < rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Int with {s} using <", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Char => |rhs| Value{ .Bool = lhs < rhs },
             .Int => |rhs| Value{ .Bool = @as(i32, lhs) < rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Char with {s} using <", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Bool = lhs < rhs },
             .Int => |rhs| Value{ .Bool = lhs < floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Float with {s} using <", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use < on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use < on {s}", .{self.getType()}),
     };
 }
 
-pub fn Gt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Gt(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Bool = lhs > rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Int with {s} using >", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Char => |rhs| Value{ .Bool = lhs > rhs },
             .Int => |rhs| Value{ .Bool = @as(i32, lhs) > rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Char with {s} using >", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Bool = lhs > rhs },
             .Int => |rhs| Value{ .Bool = lhs > floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Float with {s} using >", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use > on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use > on {s}", .{self.getType()}),
     };
 }
 
-pub fn Le(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Le(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Bool = lhs <= rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Int with {s} using <=", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Char => |rhs| Value{ .Bool = lhs <= rhs },
             .Int => |rhs| Value{ .Bool = @as(i32, lhs) <= rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Char with {s} using <=", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Bool = lhs <= rhs },
             .Int => |rhs| Value{ .Bool = lhs <= floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Float with {s} using <=", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use <= on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use <= on {s}", .{self.getType()}),
     };
 }
 
-pub fn Ge(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Ge(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Bool = lhs >= rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Int with {s} using >=", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Char => |rhs| Value{ .Bool = lhs >= rhs },
             .Int => |rhs| Value{ .Bool = @as(i32, lhs) >= rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Char with {s} using >=", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Bool = lhs >= rhs },
             .Int => |rhs| Value{ .Bool = lhs >= floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Float with {s} using >=", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use >= on this type" } },
+        else => try makeError(ctx.heap, reference, "Cannot use >= on {s}", .{self.getType()}),
     };
 }
 
-pub fn Equal(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Equal(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Bool = lhs == rhs },
             .Null => Value{ .Bool = false },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Int with {s} using ==", .{other.getType()}),
         },
         .Bool => |lhs| switch (other) {
             .Bool => |rhs| Value{ .Bool = lhs == rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Bool with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Bool with {s} using ==", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Char => |rhs| Value{ .Bool = lhs == rhs },
             .Int => |rhs| Value{ .Bool = @as(i32, lhs) == rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Char with {s} using ==", .{other.getType()}),
         },
         .String => |lhs| switch (other) {
             .String => |rhs| Value{ .Bool = std.mem.eql(u8, lhs.content.items, rhs.content.items) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare String with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare String with {s} using ==", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Bool = lhs == rhs },
             .Int => |rhs| Value{ .Bool = lhs == floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Float with {s} using ==", .{other.getType()}),
         },
         .Null => switch (other) {
             .Null => Value{ .Bool = true },
             else => Value{ .Bool = false },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Unsupported == comparison" } },
+        else => try makeError(ctx.heap, reference, "Cannot use == on {s}", .{self.getType()}),
     };
 }
 
-pub fn NotEqual(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn NotEqual(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {
             .Int => |rhs| Value{ .Bool = lhs != rhs },
             .Null => Value{ .Bool = true },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Int with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Int with {s} using !=", .{other.getType()}),
         },
         .Bool => |lhs| switch (other) {
             .Bool => |rhs| Value{ .Bool = lhs != rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Bool with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Bool with {s} using !=", .{other.getType()}),
         },
         .Char => |lhs| switch (other) {
             .Char => |rhs| Value{ .Bool = lhs != rhs },
             .Int => |rhs| Value{ .Bool = @as(i32, lhs) != rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Char with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Char with {s} using !=", .{other.getType()}),
         },
         .String => |lhs| switch (other) {
             .String => |rhs| Value{ .Bool = !std.mem.eql(u8, lhs.content.items, rhs.content.items) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare String with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare String with {s} using !=", .{other.getType()}),
         },
         .Float => |lhs| switch (other) {
             .Float => |rhs| Value{ .Bool = lhs != rhs },
             .Int => |rhs| Value{ .Bool = lhs != floatFromInt(rhs) },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot compare Float with this type" } },
+            else => try makeError(ctx.heap, reference, "Cannot compare Float with {s} using !=", .{other.getType()}),
         },
         .Null => switch (other) {
             .Null => Value{ .Bool = false },
             else => Value{ .Bool = true },
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Unsupported != comparison" } },
+        else => try makeError(ctx.heap, reference, "Cannot use != on {s}", .{self.getType()}),
     };
 }
 
-pub fn Or(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn Or(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Bool => |lhs| switch (other) {
             .Bool => |rhs| Value{ .Bool = lhs or rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'or' on non-boolean values" } },
+            else => try makeError(ctx.heap, reference, "Cannot use 'or' between Bool and {s}", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'or' on non-boolean values" } },
+        else => try makeError(ctx.heap, reference, "Cannot use 'or' on {s}", .{self.getType()}),
     };
 }
 
-pub fn And(self: Value, other: Value, ctx: *Context, reference: Parser.Location) Value {
-    _ = ctx;
+pub fn And(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Bool => |lhs| switch (other) {
             .Bool => |rhs| Value{ .Bool = lhs and rhs },
-            else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'and' on non-boolean values" } },
+            else => try makeError(ctx.heap, reference, "Cannot use 'and' between Bool and {s}", .{other.getType()}),
         },
-        else => Value{ .Error = .{ .reference = reference, .message = "Cannot use 'and' on non-boolean values" } },
+        else => try makeError(ctx.heap, reference, "Cannot use 'and' on {s}", .{self.getType()}),
     };
 }

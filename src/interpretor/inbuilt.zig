@@ -11,7 +11,7 @@ const Parser = @import("../parser.zig");
 const Context = Itpr.Context;
 const Value = Values.Value;
 
-fn dispatchBuiltin(name: []const u8, args: std.ArrayList(Values.Value), ctx: *Itpr.Context, reference: Parser.Location) !Values.Value {
+pub fn dispatchBuiltin(name: []const u8, args: std.ArrayList(Values.Value), ctx: *Itpr.Context, reference: Parser.Location) !Values.Value {
     if (std.mem.eql(u8, name, "input")) {
         if (args.items.len > 0) Print.print(args.items[0]);
         const stdin = std.io.getStdIn().reader();
@@ -22,40 +22,32 @@ fn dispatchBuiltin(name: []const u8, args: std.ArrayList(Values.Value), ctx: *It
         const s_obj = try ctx.heap.create(Values.StringObj);
         s_obj.* = .{ .content = buf, .references = 0 };
         return Values.Value{ .String = s_obj };
+        //
     } else if (std.mem.eql(u8, name, "read")) {
-        // Read and returns the content of a file
-
-        var file = std.fs.cwd().openFile(args.items[0].String.content.items, .{}) catch {
-            return Values.Value{ .Error = .{ .message = "Error while reading the file", .reference = reference } };
+        const filename = args.items[0].String.content.items;
+        var file = std.fs.cwd().openFile(filename, .{}) catch |err| {
+            return try Values.makeError(ctx.heap, reference, "Cannot open '{s}': {s}", .{ filename, @errorName(err) });
         };
         defer file.close();
 
-        const stat = file.stat() catch {
-            return Values.Value{ .Error = .{ .message = "Error while reading the file", .reference = reference } };
+        const stat = file.stat() catch |err| {
+            return try Values.makeError(ctx.heap, reference, "Cannot stat '{s}': {s}", .{ filename, @errorName(err) });
         };
 
-        const buf = file.readToEndAlloc(ctx.heap, stat.size) catch {
-            return Values.Value{ .Error = .{ .message = "Error while reading the file", .reference = reference } };
+        const buf = file.readToEndAlloc(ctx.heap, stat.size) catch |err| {
+            return try Values.makeError(ctx.heap, reference, "Cannot read '{s}': {s}", .{ filename, @errorName(err) });
         };
         defer ctx.heap.free(buf);
         var s_content = std.ArrayList(u8).init(ctx.heap);
-        s_content.appendSlice(buf) catch {
-            return Values.Value{ .Error = .{ .message = "Error while reading the file", .reference = reference } };
-        };
+        try s_content.appendSlice(buf);
 
-        const s_obj = ctx.heap.create(Values.StringObj) catch {
-            return Values.Value{ .Error = .{ .message = "Error while reading the file", .reference = reference } };
-        };
-        s_obj.* = .{
-            .content = s_content,
-            .references = 0,
-        };
-
+        const s_obj = try ctx.heap.create(Values.StringObj);
+        s_obj.* = .{ .content = s_content, .references = 0 };
         return Values.Value{ .String = s_obj };
+    } else if (std.mem.eql(u8, name, "error")) {
+        const message = args.items[0].String.content.items;
+        return try Values.makeError(ctx.heap, reference, "{s}", .{message});
     } else {
-        return Values.Value{ .Error = .{
-            .message = "Unable to dispatch the inbuilt function",
-            .reference = reference,
-        } };
+        return try Values.makeError(ctx.heap, reference, "Unknown builtin function '{s}'", .{name});
     }
 }

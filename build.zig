@@ -15,12 +15,17 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const debug_gc_val = b.option(bool, "debug-gc", "Back the arena with GPA instead of page_allocator (enables memory safety checks)") orelse false;
+    const options_step = b.addOptions();
+    options_step.addOption(bool, "debug_gc", debug_gc_val);
+
     // The rest of the compiler
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseFast,
     });
+    exe_mod.addImport("build_options", options_step.createModule());
 
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
