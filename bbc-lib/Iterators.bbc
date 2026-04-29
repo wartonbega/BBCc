@@ -1,0 +1,34 @@
+
+trait Iter(Type<Retype>) {
+    func next() Retype
+
+    func isLast() Bool
+}
+
+
+struct <Type: Add>RangeType {
+    Type start, 
+    Type end,
+    Type current,
+    Type unit
+}
+
+implement Iter: RangeType<Type> {
+    func next() Type {
+        self.current = self.current + self.unit
+        self.current - self.unit
+    }
+
+    func isLast() Bool {
+        self.current == self.end
+    }
+}
+
+func <Type>Range(Type start, Type end) RangeType<Type> {
+    @RangeType{
+        start = start,
+        end = end,
+        current = start,
+        unit = unitOf(start)
+    }
+}

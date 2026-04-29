@@ -281,7 +281,8 @@ fn resolveImportsInternal(
                     errors.bbcError("Cannot open import '{s}'", .{abs_path}, imp.reference);
                     return ImportError.FileNotFound;
                 };
-                const imported_prog = try lexer.lexeProgram(tokens, allocator, abs_path);
+                const imported_uri = try std.mem.concat(allocator, u8, &.{ "file://", abs_path });
+                const imported_prog = try lexer.lexeProgram(tokens, allocator, imported_uri);
 
                 const imported_dir = std.fs.path.dirname(abs_path) orelse ".";
                 try resolveImportsInternal(imported_prog, imported_dir, arena, visiting);

@@ -132,6 +132,7 @@ pub const Handlers = struct {
             arena,
             prog,
             ctx,
+            doc.uri,
         );
 
         std.log.info("Returning {} inlay hints", .{hints.len});
@@ -157,6 +158,19 @@ pub const Handlers = struct {
 
         std.log.info("Document found", .{});
 
+        // Hovering over an import statement → show the resolved path.
+        for (doc.import_decls) |decl| {
+            if (decl.reference.contains(params.position)) {
+                const hover_text = if (decl.libname) |ln|
+                    try std.fmt.allocPrint(arena, "import `{s}` as `{s}`\n\n→ `{s}`", .{ decl.path, ln, decl.target_uri })
+                else
+                    try std.fmt.allocPrint(arena, "import `{s}`\n\n→ `{s}`", .{ decl.path, decl.target_uri });
+                return protocol.Hover{
+                    .contents = .{ .kind = .markdown, .value = hover_text },
+                };
+            }
+        }
+
         if (doc.program) |prog| {
             if (doc.ctx) |ctx| {
                 const infos = context_hinter.getInfos(params.position, arena, prog, ctx);
@@ -175,12 +189,6 @@ pub const Handlers = struct {
                 };
             }
         }
-
-        // const hover_text = try std.fmt.allocPrint(
-        //     arena,
-        //     "BBC Language Document\nVersion: {d}",
-        //     .{doc.version},
-        // );
 
         return protocol.Hover{
             .contents = .{
@@ -208,6 +216,20 @@ pub const Handlers = struct {
             std.log.info("Document not found", .{});
             return null;
         };
+
+        // Clicking on an import statement → jump to the top of the imported file.
+        for (doc.import_decls) |decl| {
+            if (decl.reference.contains(params.position)) {
+                std.log.info("Definition is import: {s}", .{decl.target_uri});
+                return protocol.Location{
+                    .uri = decl.target_uri,
+                    .range = .{
+                        .start = .{ .line = 0, .character = 0 },
+                        .end = .{ .line = 0, .character = 0 },
+                    },
+                };
+            }
+        }
 
         if (doc.program) |prog| {
             if (doc.ctx) |ctx|
@@ -245,9 +267,9 @@ pub const Handlers = struct {
 
         // Add BBC language keywords
         const keywords = [_][]const u8{
-            "func",    "let",  "if",   "elif",  "else", "while",  "for",
-            "struct",  "enum", "true", "false", "null", "return", "print",
-            "println", "free",
+            "func",    "let",  "if",    "elif",  "else",  "while",  "for",
+            "struct",  "enum", "true",  "false", "null",  "return", "print",
+            "println", "free", "input", "read",  "error", "zeroOf", "unitOf",
         };
 
         for (keywords) |keyword| {

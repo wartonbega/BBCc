@@ -47,6 +47,25 @@ pub fn dispatchBuiltin(name: []const u8, args: std.ArrayList(Values.Value), ctx:
     } else if (std.mem.eql(u8, name, "error")) {
         const message = args.items[0].String.content.items;
         return try Values.makeError(ctx.heap, reference, "{s}", .{message});
+    } else if (std.mem.eql(u8, name, "unitOf")) {
+        return switch (args.items[0]) {
+            .Bool => Value{ .Bool = true },
+            .Char => Value{ .Char = 1 },
+            .Int => Value{ .Int = 1 },
+            else => try Values.makeError(ctx.heap, reference, "Can't make the unit of runtime type {s}", .{@tagName(args.items[0])}),
+        };
+    } else if (std.mem.eql(u8, name, "zeroOf")) {
+        return switch (args.items[0]) {
+            .Bool => Value{ .Bool = false },
+            .Char => Value{ .Char = 0 },
+            .Int => Value{ .Int = 0 },
+            else => try Values.makeError(
+                ctx.heap,
+                reference,
+                "Can't make the zero of runtime type {s}",
+                .{@tagName(args.items[0])},
+            ),
+        };
     } else {
         return try Values.makeError(ctx.heap, reference, "Unknown builtin function '{s}'", .{name});
     }

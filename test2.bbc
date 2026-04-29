@@ -1,49 +1,18 @@
-struct <Type> StringIterator {
-    Int current,
-    String content,
-    Type param,
-}
-
-trait Iter(Type<Retype>) {
-    func next() Retype
-
-    func isLast() Bool
-}
-
-implement Iter: StringIterator<Type> {
-    func next() Type {
-        let idx = self.current
-        self.current = self.current + 1
-        self.content[idx]
-    }
-
-    func isLast() Bool {
-        self.current == self.content._size
-    }
-}
-
-
-func stringIterator(String arg) StringIterator<Char> {
-    @StringIterator{
-        current = 0,
-        content = arg,
-        param = '0'
-    }
-}
+import("bbc-lib/Strings.bbc")
 
 func reduceDoubleSpace(String s) String {
     let ret = ""
-    let accu = false
+    let accu = true
     for c: stringIterator(s) 
-        ret = if c == ' ' && not accu {
-            ret + c
-        } elif c == ' ' {
-            accu = true 
-            ret
-        } else {
+        ret = if c == ' ' && accu {
             accu = false
             ret + c
-        }
+        } elif c != ' ' {
+            accu = true
+            ret + c
+        } else 
+            ret
+
     ret
 }
 
@@ -53,8 +22,7 @@ func main() Int {
     for c: stringIterator(b) 
         if c != '\n' && c != '\t' && c != '\r'
             print(c)
-    
-    error("test")
+
     println('')
     1
 }

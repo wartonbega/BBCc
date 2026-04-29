@@ -139,6 +139,12 @@ fn hintSearchValue(pos: position.Position, allocator: std.mem.Allocator, value: 
             if (wl.exec.getReference().contains(pos))
                 return hintSearchValue(pos, allocator, wl.exec, ctx);
         },
+        .For => |fl| {
+            if (fl.iterable.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, fl.iterable, ctx);
+            if (fl.exec.getReference().contains(pos))
+                return hintSearchValue(pos, allocator, fl.exec, ctx);
+        },
         else => std.debug.print("unimplemented {}\n", .{value.*}),
     }
     return hinterInfo{ .ttype = .{ .noInfo = {} } };
@@ -280,6 +286,12 @@ fn hintGetDefinitionValue(pos: position.Position, allocator: std.mem.Allocator, 
             if (whi.exec.getReference().contains(pos))
                 return hintGetDefinitionValue(pos, allocator, whi.exec, ctx);
         },
+        .For => |fl| {
+            if (fl.iterable.getReference().contains(pos))
+                return hintGetDefinitionValue(pos, allocator, fl.iterable, ctx);
+            if (fl.exec.getReference().contains(pos))
+                return hintGetDefinitionValue(pos, allocator, fl.exec, ctx);
+        },
         .Print => |print| {
             for (print.args.items) |arg| {
                 if (arg.getReference().contains(pos))
@@ -413,12 +425,15 @@ pub const InlayHintCollector = struct {
     hints: std.ArrayList(protocol.InlayHint),
     range: protocol.Range,
     allocator: std.mem.Allocator,
+    /// Only emit hints for AST nodes whose reference URI matches this document.
+    doc_uri: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, range: protocol.Range) InlayHintCollector {
+    pub fn init(allocator: std.mem.Allocator, range: protocol.Range, doc_uri: []const u8) InlayHintCollector {
         return .{
             .hints = std.ArrayList(protocol.InlayHint).init(allocator),
             .range = range,
             .allocator = allocator,
+            .doc_uri = doc_uri,
         };
     }
 
@@ -549,6 +564,10 @@ fn collectHintsFromValue(collector: *InlayHintCollector, value: *ast.Value, ctx:
             collectHintsFromValue(collector, wl.condition, ctx);
             collectHintsFromValue(collector, wl.exec, ctx);
         },
+        .For => |fl| {
+            collectHintsFromValue(collector, fl.iterable, ctx);
+            collectHintsFromValue(collector, fl.exec, ctx);
+        },
         .varDec => |vardec| {
             // Optionally add type hints for variable declarations without explicit types
             if (ctx.variableExist(vardec.name)) {
@@ -584,15 +603,19 @@ fn collectHintsFromProg(collector: *InlayHintCollector, prog: *ast.Program, ctx:
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
             .FuncDef => |fd| {
+                // Skip functions inlined from other files to avoid phantom hints.
+                if (!std.mem.eql(u8, fd.reference.uri, collector.doc_uri)) continue;
                 collectHintsFromFuncdef(collector, fd, ctx);
             },
             .StructDef => {},
             .TraitDef => {},
             .TraitImpl => |ti| {
-            for (ti.methods.items) |method| {
-                collectHintsFromFuncdef(collector, method, ctx);
-            }
-        },
+                // Skip trait impls inlined from other files.
+                if (!std.mem.eql(u8, ti.reference.uri, collector.doc_uri)) continue;
+                for (ti.methods.items) |method| {
+                    collectHintsFromFuncdef(collector, method, ctx);
+                }
+            },
             .ImportDef => {},
         }
     }
@@ -603,8 +626,9 @@ pub fn getInlayHints(
     allocator: std.mem.Allocator,
     prog: *ast.Program,
     ctx: *analyser.Context,
+    doc_uri: []const u8,
 ) ![]protocol.InlayHint {
-    var collector = InlayHintCollector.init(allocator, range);
+    var collector = InlayHintCollector.init(allocator, range, doc_uri);
 
     collectHintsFromProg(&collector, prog, ctx);
 

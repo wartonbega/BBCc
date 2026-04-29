@@ -4,6 +4,7 @@ pub const Param = struct {
     type_name: []const u8,
     any: bool,
     variadic: bool,
+    is_type_param: bool, // The type is <Name>
 };
 
 pub const Func = struct {
@@ -11,6 +12,7 @@ pub const Func = struct {
     params: []Param,
     return_type: []const u8,
     return_type_has_error: bool,
+    return_is_type_param: bool,
     propagate_errors: bool,
 };
 
@@ -38,6 +40,9 @@ pub fn load(allocator: std.mem.Allocator) ![]Func {
         const ret_type_has_error = ret_str.len > 0 and ret_str[0] == '!';
         if (ret_type_has_error) ret_str = std.mem.trim(u8, ret_str[1..ret_str.len], " \t");
 
+        const return_is_type_param = ret_str.len > 1 and ret_str[0] == '<' and ret_str[ret_str.len - 1] == '>';
+        if (return_is_type_param) ret_str = std.mem.trim(u8, ret_str[1 .. ret_str.len - 1], " \t");
+
         var params = std.ArrayList(Param).init(allocator);
         if (params_str.len > 0) {
             var param_iter = std.mem.splitScalar(u8, params_str, ',');
@@ -45,12 +50,18 @@ pub fn load(allocator: std.mem.Allocator) ![]Func {
                 const ps = std.mem.trim(u8, raw_param, " \t");
                 if (ps.len == 0) continue;
                 const variadic = ps[ps.len - 1] == '*';
-                const type_str = if (variadic) std.mem.trim(u8, ps[0 .. ps.len - 1], " \t") else ps;
+
+                var type_str = if (variadic) std.mem.trim(u8, ps[0 .. ps.len - 1], " \t") else ps;
+
+                const type_param = type_str[type_str.len - 1] == '>' and type_str[0] == '<';
+                type_str = if (type_param) std.mem.trim(u8, type_str[1 .. type_str.len - 1], " \t") else type_str;
+
                 const is_any = std.mem.eql(u8, type_str, "Any");
                 try params.append(.{
                     .type_name = type_str,
                     .any = is_any,
                     .variadic = variadic,
+                    .is_type_param = type_param,
                 });
             }
         }
@@ -61,6 +72,7 @@ pub fn load(allocator: std.mem.Allocator) ![]Func {
             .return_type = ret_str,
             .propagate_errors = propagate_errors,
             .return_type_has_error = ret_type_has_error,
+            .return_is_type_param = return_is_type_param,
         });
     }
     return result.toOwnedSlice();

@@ -267,11 +267,13 @@ pub const Reader = struct {
     lastPos: Position,
     allocator: std.mem.Allocator,
 
-    pub fn new(allocator: *std.heap.ArenaAllocator, filename: []const u8) !Reader {
+    pub fn init(allocator: *std.heap.ArenaAllocator, filename: []const u8) !Reader {
         const file = try std.fs.cwd().openFile(filename, .{});
         defer file.close();
 
-        const contents = try file.readToEndAlloc(allocator.allocator(), 1 << 20); // max 1 MB
+        const stats = try file.stat();
+        const contents = if (stats.size == 0) try allocator.allocator().alloc(u8, 0) else try file.readToEndAlloc(allocator.allocator(), 1 << 20); // max 1 MB
+
         return Reader{
             .content = contents,
             .pos = 0,
@@ -506,7 +508,7 @@ pub fn parse(filename: []const u8, arena: *std.heap.ArenaAllocator) !std.ArrayLi
     const allocator = arena.allocator();
 
     // The reader of the file. Can perfom peek, consume and canPeek
-    var reader = try Reader.new(arena, filename);
+    var reader = try Reader.init(arena, filename);
 
     // The final list of all tokens
     var tokens = std.ArrayList(Token).init(arena.allocator());

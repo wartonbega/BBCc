@@ -351,6 +351,10 @@ pub fn Times(self: Value, other: Value, ctx: *Context, reference: Parser.Locatio
             .Int => |rhs| Value{ .Float = lhs * floatFromInt(rhs) },
             else => try makeError(ctx.heap, reference, "Cannot multiply Float by {s}", .{other.getType()}),
         },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| Value{ .Char = lhs * rhs },
+            else => try makeError(ctx.heap, reference, "Cannot multiply Char by {s}", .{other.getType()}),
+        },
         else => try makeError(ctx.heap, reference, "Cannot use * on {s}", .{self.getType()}),
     };
 }
@@ -365,6 +369,10 @@ pub fn Div(self: Value, other: Value, ctx: *Context, reference: Parser.Location)
             .Float => |rhs| Value{ .Float = lhs / rhs },
             .Int => |rhs| Value{ .Float = lhs / floatFromInt(rhs) },
             else => try makeError(ctx.heap, reference, "Cannot divide Float by {s}", .{other.getType()}),
+        },
+        .Char => |lhs| switch (other) {
+            .Char => |rhs| if (rhs != 0) Value{ .Char = lhs / rhs } else try makeError(ctx.heap, reference, "Cannot divide {d} by zero", .{lhs}),
+            else => try makeError(ctx.heap, reference, "Cannot multiply Char by {s}", .{other.getType()}),
         },
         else => try makeError(ctx.heap, reference, "Cannot use / on {s}", .{self.getType()}),
     };

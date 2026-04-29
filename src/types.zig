@@ -242,12 +242,28 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
             if (func.func.* == .identifier and ctx.inbuilt_funcs.contains(func.func.identifier.name)) {
                 const indef = ctx.inbuilt_funcs.get(func.func.identifier.name).?;
                 var has_error = false;
-                for (func.args.items) |arg| {
+                var concrete_type = std.StringHashMap(*ast.Type).init(allocator);
+                defer concrete_type.deinit();
+                for (func.args.items, 0..) |arg, i| {
                     const at = try getTypeOfValue(arg, ctx, allocator);
                     if (at == .decided and at.decided.err) has_error = true;
+                    if (indef.params.len == 0) continue;
+                    const param_idx = if (i < indef.params.len) i else indef.params.len - 1;
+                    const param = indef.params[param_idx];
+                    if (param.is_type_param and at == .decided and !concrete_type.contains(param.type_name))
+                        try concrete_type.put(param.type_name, at.decided);
+                }
+                const err_flag = indef.return_type_has_error or if (indef.propagate_errors) has_error else false;
+                if (indef.return_is_type_param) {
+                    if (concrete_type.get(indef.return_type)) |bound| {
+                        const ret = try allocator.create(ast.Type);
+                        ret.* = .{ .base = bound.base, .err = err_flag, .references = 0 };
+                        break :blk Type{ .decided = ret };
+                    }
+                    break :blk Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
                 }
                 const ret = try allocator.create(ast.Type);
-                ret.* = .{ .base = .{ .name = indef.return_type }, .err = if (indef.propagate_errors) has_error else false, .references = 0 };
+                ret.* = .{ .base = .{ .name = indef.return_type }, .err = err_flag, .references = 0 };
                 break :blk Type{ .decided = ret };
             }
             // We have to borrow a the majority of the code from analyse.analysefuncall,
@@ -515,11 +531,20 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
     // Intercept inbuilt function calls — args with typed params get hints, Any params are unconstrained
     if (value.func.* == .identifier and ctx.inbuilt_funcs.contains(value.func.identifier.name)) {
         const indef = ctx.inbuilt_funcs.get(value.func.identifier.name).?;
+        var concrete_type = std.StringHashMap(*ast.Type).init(allocator);
+        defer concrete_type.deinit();
+        // Back-propagate: if the return type is a type param and we have an expected type, seed the map
+        if (indef.return_is_type_param and expType == .decided)
+            try concrete_type.put(indef.return_type, expType.decided);
         for (value.args.items, 0..) |arg, i| {
             if (indef.params.len == 0) break;
             const param_idx = if (i < indef.params.len) i else indef.params.len - 1;
             const param = indef.params[param_idx];
-            if (!param.any) {
+            if (param.is_type_param) {
+                if (concrete_type.get(param.type_name)) |bound|
+                    try inferTypeValue(arg, ctx, allocator, Type{ .decided = bound });
+                // else: can't infer yet, skip
+            } else if (!param.any) {
                 const expected_t = try allocator.create(ast.Type);
                 expected_t.* = .{ .base = .{ .name = param.type_name }, .err = false, .references = 0 };
                 try inferTypeValue(arg, ctx, allocator, Type{ .decided = expected_t });
