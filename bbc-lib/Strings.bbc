@@ -1,0 +1,28 @@
+import("Iterators.bbc") as Iterators
+
+struct <Type> StringIterator {
+    Int current,
+    String content,
+    Type param,
+}
+
+implement Iterators.Iter: StringIterator<Type> {
+    func next() Type {
+        let idx = self.current
+        self.current = self.current + 1
+        self.content[idx]
+    }
+
+    func isLast() Bool {
+        self.current == self.content._size
+    }
+}
+
+
+func stringIterator(String arg) StringIterator<Char> {
+    @StringIterator{
+        current = 0,
+        content = arg,
+        param = '0'
+    }
+}

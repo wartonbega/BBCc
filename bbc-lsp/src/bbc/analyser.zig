@@ -22,6 +22,19 @@ pub const funcPair = struct {
 };
 const ImplemHashmap = std.hash_map.StringHashMap(ArrayList(funcPair));
 
+fn resolveTraitName(trait_defs: *const std.StringHashMap(*ast.traitDef), bare: []const u8) []const u8 {
+    if (trait_defs.contains(bare)) return bare;
+    var it = trait_defs.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (key.len > bare.len + 1 and
+            key[key.len - bare.len - 1] == '.' and
+            std.mem.eql(u8, key[key.len - bare.len ..], bare))
+            return key;
+    }
+    return bare;
+}
+
 pub const functionVersion = struct {
     name: []const u8,
     signature: ast.TypeFunc,
@@ -433,8 +446,9 @@ pub fn analyseAssignationLhs(value: *ast.Value, ctx: *Context, allocator: Alloca
                     }
                     // User-defined IndexSet (user_trait_impl)
                     const has_index_set = if (ctx.user_trait_impl.get(base_name)) |impls| blk: {
+                        const index_set_fqn = resolveTraitName(&ctx.trait_defs, "IndexSet");
                         for (impls.items) |impl_name|
-                            if (std.mem.eql(u8, impl_name, "IndexSet")) break :blk true;
+                            if (std.mem.eql(u8, impl_name, index_set_fqn)) break :blk true;
                         break :blk false;
                     } else false;
                     if (has_index_set) return;
@@ -460,6 +474,9 @@ fn analyseInbuiltFuncall(func_name: []const u8, func: *ast.Funcall, ctx: *Contex
     if (!is_variadic and func.args.items.len != indef.params.len)
         try ctx.Error("Function '{s}' expects {d} arguments, got {d}", .{ func_name, indef.params.len, func.args.items.len }, func.func.getReference());
 
+    var concrete_type = std.StringHashMap(*ast.Type).init(allocator);
+    defer concrete_type.deinit();
+
     var has_error = false;
     for (func.args.items, 0..) |arg, i| {
         const arg_type = try analyseValue(arg, ctx, allocator);
@@ -467,7 +484,15 @@ fn analyseInbuiltFuncall(func_name: []const u8, func: *ast.Funcall, ctx: *Contex
         if (indef.params.len == 0) continue;
         const param_idx = if (i < indef.params.len) i else indef.params.len - 1;
         const param = indef.params[param_idx];
-        if (!param.any and arg_type == .decided) {
+        if (param.is_type_param and arg_type == .decided) {
+            if (concrete_type.get(param.type_name)) |already_bound| {
+                const bound = Types.Type{ .decided = already_bound };
+                if (!arg_type.matchType(bound))
+                    try ctx.Error("Argument {d} of '{s}': type parameter '{s}' already bound to '{s}', got '{s}'", .{ i + 1, func_name, param.type_name, bound.toString(allocator), arg_type.toString(allocator) }, arg.getReference());
+            } else {
+                try concrete_type.put(param.type_name, arg_type.decided);
+            }
+        } else if (!param.any and arg_type == .decided) {
             const expected_t = try allocator.create(ast.Type);
             expected_t.* = .{ .base = .{ .name = param.type_name }, .err = false, .references = 0 };
             if (!arg_type.matchType(Types.Type{ .decided = expected_t }))
@@ -475,8 +500,18 @@ fn analyseInbuiltFuncall(func_name: []const u8, func: *ast.Funcall, ctx: *Contex
         }
     }
 
+    const err_flag = indef.return_type_has_error or if (indef.propagate_errors) has_error else false;
+    if (indef.return_is_type_param) {
+        if (concrete_type.get(indef.return_type)) |bound| {
+            const ret = try allocator.create(ast.Type);
+            ret.* = .{ .base = bound.base, .err = err_flag, .references = 0 };
+            return Types.Type{ .decided = ret };
+        }
+        return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
+    }
+
     const ret = try allocator.create(ast.Type);
-    ret.* = .{ .base = .{ .name = indef.return_type }, .err = indef.return_type_has_error or if (indef.propagate_errors) has_error else false, .references = 0 };
+    ret.* = .{ .base = .{ .name = indef.return_type }, .err = err_flag, .references = 0 };
     return Types.Type{ .decided = ret };
 }
 
@@ -1198,8 +1233,9 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
                     }
                     // User-defined Subscription trait (e.g. implement Subscription: List<Type>)
                     const has_user_sub = if (ctx.user_trait_impl.get(name)) |impls| blk: {
+                        const sub_fqn = resolveTraitName(&ctx.trait_defs, "Subscription");
                         for (impls.items) |impl_name|
-                            if (std.mem.eql(u8, impl_name, "Subscription")) break :blk true;
+                            if (std.mem.eql(u8, impl_name, sub_fqn)) break :blk true;
                         break :blk false;
                     } else false;
                     if (has_user_sub and ctx.typeDefExist(name)) {
@@ -1215,8 +1251,9 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
                 .generic => |gen| {
                     const base_name: []const u8 = gen.name;
                     const has_subs = if (ctx.user_trait_impl.get(base_name)) |impls| blk: {
+                        const sub_fqn = resolveTraitName(&ctx.trait_defs, "Subscription");
                         for (impls.items) |impl_name|
-                            if (std.mem.eql(u8, impl_name, "Subscription")) break :blk true;
+                            if (std.mem.eql(u8, impl_name, sub_fqn)) break :blk true;
                         break :blk false;
                     } else false;
                     if (!has_subs)
@@ -1266,8 +1303,9 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
                         },
                     };
                     const has_iter = if (ctx.user_trait_impl.get(base_name)) |impls| blk: {
+                        const iter_fqn = resolveTraitName(&ctx.trait_defs, "Iter");
                         for (impls.items) |impl_name|
-                            if (std.mem.eql(u8, impl_name, "Iter")) break :blk true;
+                            if (std.mem.eql(u8, impl_name, iter_fqn)) break :blk true;
                         break :blk false;
                     } else false;
                     if (!has_iter)
@@ -1502,13 +1540,13 @@ pub fn analyseTraitImpl(impl: *ast.traitImpl, ctx: *Context, allocator: Allocato
     const struct_def = ctx.getTypeDef(impl.type_name);
 
     // Verify the implementing type has enough type params for the trait's inner params
-    if (trait_def.inner_params.items.len > 0 and
-        struct_def.typeparam.items.len < trait_def.inner_params.items.len)
-        try ctx.Error(
-            "Trait '{s}' requires {d} type parameter(s), but '{s}' only has {d}",
-            .{ impl.trait_name, trait_def.inner_params.items.len, impl.type_name, struct_def.typeparam.items.len },
-            impl.reference,
-        );
+    // if (trait_def.inner_params.items.len > 0 and
+    //     struct_def.typeparam.items.len < trait_def.inner_params.items.len)
+    //     try ctx.Error(
+    //         "Trait '{s}' requires {d} type parameter(s), but '{s}' only has {d}",
+    //         .{ impl.trait_name, trait_def.inner_params.items.len, impl.type_name, struct_def.typeparam.items.len },
+    //         impl.reference,
+    //     );
 
     // Verify all required trait methods are provided
     var method_it = trait_def.methods.iterator();
@@ -1824,6 +1862,9 @@ pub fn analyseStructDef(stct: *ast.structDef, ctx: *Context, allocator: Allocato
 }
 
 pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
+    if (prog.instructions.items.len == 0)
+        return;
+
     var funcs_to_compile = ArrayList(functionVersion).init(allocator);
 
     const string_type_def = try allocator.create(ast.structDef);
@@ -1866,12 +1907,14 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
         }
     }
 
-    const main_func = ctx.getFunction("main");
-    try ctx.functions_to_compile.append(functionVersion{
-        .signature = (try createFunctionSignature(main_func, allocator)).base.function,
-        .name = "main",
-        .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
-    });
+    if (ctx.functionExist("main")) {
+        const main_func = ctx.getFunction("main");
+        try ctx.functions_to_compile.append(functionVersion{
+            .signature = (try createFunctionSignature(main_func, allocator)).base.function,
+            .name = "main",
+            .version = std.hash_map.StringHashMap(Types.Type).init(allocator),
+        });
+    }
 
     // Second pass: register struct definitions
     for (prog.instructions.items) |inst| {

@@ -8,6 +8,14 @@ const protocol = @import("protocol.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// A direct import statement found in the source before resolution.
+pub const ImportDecl = struct {
+    path: []const u8,           // path as written in source
+    target_uri: []const u8,     // resolved file:// URI of the imported file
+    libname: ?[]const u8,       // alias after "as", or null
+    reference: parser.Location, // position of the import(...) statement in this file
+};
+
 pub const Document = struct {
     uri: []const u8,
     text: []const u8,
@@ -18,6 +26,8 @@ pub const Document = struct {
     program: ?*ast.Program,
     ctx: ?*analyser.Context,
     diagnostics: std.ArrayList(protocol.Diagnostic),
+    /// Direct imports found in this file before resolution (arena-allocated).
+    import_decls: []ImportDecl,
 
     arena: std.heap.ArenaAllocator,
     allocator: Allocator,
@@ -34,6 +44,7 @@ pub const Document = struct {
             .arena = std.heap.ArenaAllocator.init(allocator),
             .allocator = allocator,
             .ctx = null,
+            .import_decls = &[_]ImportDecl{},
         };
         return doc;
     }
@@ -51,12 +62,27 @@ pub const Document = struct {
         self.text = try self.allocator.dupe(u8, new_text);
         self.version = new_version;
 
-        // Clear old parsed data
+        // Clear old parsed data (arena holds tokens/program/ctx/import_decls)
         self.arena.deinit();
         self.arena = std.heap.ArenaAllocator.init(self.allocator);
         self.tokens = null;
         self.program = null;
+        self.ctx = null;
+        self.import_decls = &[_]ImportDecl{};
         self.diagnostics.clearRetainingCapacity();
+    }
+
+    /// Re-parse and re-analyse from the current text without changing the text.
+    /// Used to refresh analysis when an imported file changes.
+    pub fn reanalyze(self: *Document) !void {
+        self.arena.deinit();
+        self.arena = std.heap.ArenaAllocator.init(self.allocator);
+        self.tokens = null;
+        self.program = null;
+        self.ctx = null;
+        self.import_decls = &[_]ImportDecl{};
+        self.diagnostics.clearRetainingCapacity();
+        try self.analyze();
     }
 
     /// Parse and analyze the document
@@ -110,7 +136,32 @@ pub const Document = struct {
         };
         self.program = prog;
 
-        // Step 2b: Resolve imports (file:// URI → path)
+        // Step 2b: Collect import declarations before they are inlined/removed.
+        {
+            const file_path_base = if (std.mem.startsWith(u8, self.uri, "file://"))
+                self.uri[7..]
+            else
+                self.uri;
+            const abs_source = std.fs.path.resolve(self.arena.allocator(), &.{file_path_base}) catch file_path_base;
+            const base_dir = std.fs.path.dirname(abs_source) orelse ".";
+            var decls = std.ArrayList(ImportDecl).init(self.arena.allocator());
+            for (prog.instructions.items) |inst| {
+                if (inst.* == .ImportDef) {
+                    const imp = inst.*.ImportDef;
+                    const abs_path = std.fs.path.resolve(self.arena.allocator(), &.{ base_dir, imp.path }) catch continue;
+                    const target_uri = std.mem.concat(self.arena.allocator(), u8, &.{ "file://", abs_path }) catch continue;
+                    decls.append(.{
+                        .path = imp.path,
+                        .target_uri = target_uri,
+                        .libname = imp.libname,
+                        .reference = imp.reference,
+                    }) catch continue;
+                }
+            }
+            self.import_decls = decls.items;
+        }
+
+        // Step 2c: Resolve imports (file:// URI → path)
         const file_path = if (std.mem.startsWith(u8, self.uri, "file://"))
             self.uri[7..]
         else
@@ -194,5 +245,28 @@ pub const DocumentStore = struct {
             try doc.update(text, version);
             try doc.analyze();
         }
+
+        // Re-analyse any open document that imports the file we just changed.
+        var it = self.documents.valueIterator();
+        while (it.next()) |doc_ptr| {
+            const other = doc_ptr.*;
+            if (std.mem.eql(u8, other.uri, uri)) continue;
+            for (other.import_decls) |decl| {
+                if (std.mem.eql(u8, decl.target_uri, uri)) {
+                    other.reanalyze() catch {};
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Returns a slice of all currently-open document URIs (arena-allocated).
+    pub fn allUris(self: *DocumentStore, arena: Allocator) ![][]const u8 {
+        var list = std.ArrayList([]const u8).init(arena);
+        var it = self.documents.valueIterator();
+        while (it.next()) |doc_ptr| {
+            try list.append(doc_ptr.*.uri);
+        }
+        return list.toOwnedSlice();
     }
 };

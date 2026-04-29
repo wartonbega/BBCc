@@ -1,0 +1,72 @@
+
+struct <Type> List {
+    Int count,
+    Int size,
+    [Type] v
+}
+
+func list(Int size, Int default) List<Int> {
+    let ret = @List{
+        count = 0,
+        size = size,
+        v = @[#Int size]
+    }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = default
+        i = i + 1
+    }
+    ret
+}
+
+func <Type: Add> rampe(Int size, Type begin) List<Type> {
+    let ret = @List{
+        count = 0,
+        size = size,
+        v = @[#Type size]
+    }
+    let i = 0
+    while (i < size) {
+        ret.v[i] = begin + i
+        i = i + 1
+    }
+    ret
+}
+
+trait Iter(Type<Retype>) {
+    func next() Retype
+
+    func isLast() Bool
+}
+
+
+implement Iter: List<Type> {
+    func next() Type {
+        self.count = self.count + 1
+        self.v[self.count - 1]
+    }
+
+    func isLast() Bool {
+        self.count == self.size
+    }
+}
+
+trait Subscription(Type<SubType>) {
+    func index(Int i) !SubType
+}
+
+implement Subscription: List<Type> {
+    func index(Int idx) !Type {
+        self.v[idx]
+    }
+}
+
+trait IndexSet(Type<SubType>) {
+    func set(Int i, SubType value) !Void
+}
+
+implement IndexSet: List<Type> {
+    func set(Int i, Type value) !Void {
+        self.v[i] = value
+    }
+}

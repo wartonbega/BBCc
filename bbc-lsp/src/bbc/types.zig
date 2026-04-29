@@ -515,11 +515,20 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
     // Intercept inbuilt function calls — args with typed params get hints, Any params are unconstrained
     if (value.func.* == .identifier and ctx.inbuilt_funcs.contains(value.func.identifier.name)) {
         const indef = ctx.inbuilt_funcs.get(value.func.identifier.name).?;
+        var concrete_type = std.StringHashMap(*ast.Type).init(allocator);
+        defer concrete_type.deinit();
+        // Back-propagate: if the return type is a type param and we have an expected type, seed the map
+        if (indef.return_is_type_param and expType == .decided)
+            try concrete_type.put(indef.return_type, expType.decided);
         for (value.args.items, 0..) |arg, i| {
             if (indef.params.len == 0) break;
             const param_idx = if (i < indef.params.len) i else indef.params.len - 1;
             const param = indef.params[param_idx];
-            if (!param.any) {
+            if (param.is_type_param) {
+                if (concrete_type.get(param.type_name)) |bound|
+                    try inferTypeValue(arg, ctx, allocator, Type{ .decided = bound });
+                // else: can't infer yet, skip
+            } else if (!param.any) {
                 const expected_t = try allocator.create(ast.Type);
                 expected_t.* = .{ .base = .{ .name = param.type_name }, .err = false, .references = 0 };
                 try inferTypeValue(arg, ctx, allocator, Type{ .decided = expected_t });

@@ -167,7 +167,8 @@ pub fn interpreteProgram(ast: *Ast.Program, cctx: *analyser.Context, alloc: std.
 fn interpreteProgramImpl(ast: *Ast.Program, cctx: *analyser.Context, alloc: std.mem.Allocator, heapAllocator: std.mem.Allocator) !void {
     var ctx = Context.init(cctx, heapAllocator);
 
-    _ = ast;
+    if (ast.instructions.items.len == 0)
+        return;
 
     var func_it = cctx.functions.iterator();
     while (func_it.next()) |function| {

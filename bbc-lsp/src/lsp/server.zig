@@ -201,8 +201,30 @@ pub const Server = struct {
         } else if (std.mem.eql(u8, method, "textDocument/completion")) {
             std.log.info("Processing completion request", .{});
 
-            // Return empty completion list for now
-            const response = protocol.Response{
+            const params_value = root.object.get("params") orelse return error.MissingParams;
+            const params = try std.json.parseFromValue(
+                protocol.CompletionParams,
+                arena,
+                params_value,
+                .{ .ignore_unknown_fields = true },
+            );
+
+            const completion_result = try self.handlers.handleCompletion(params.value, arena);
+
+            const response = if (completion_result) |result| blk: {
+                var result_string = std.ArrayList(u8).init(arena);
+                try std.json.stringify(result, .{}, result_string.writer());
+                const result_parsed = try std.json.parseFromSlice(
+                    std.json.Value,
+                    arena,
+                    result_string.items,
+                    .{},
+                );
+                break :blk protocol.Response{
+                    .id = id,
+                    .result = result_parsed.value,
+                };
+            } else protocol.Response{
                 .id = id,
                 .result = .null,
             };
@@ -296,8 +318,11 @@ pub const Server = struct {
 
             try self.handlers.handleDidChange(params.value);
 
-            // Send diagnostics
-            try self.publishDiagnostics(params.value.textDocument.uri, arena);
+            // Publish diagnostics for the changed file and any dependents that were re-analysed.
+            const all_uris = try self.store.allUris(arena);
+            for (all_uris) |doc_uri| {
+                try self.publishDiagnostics(doc_uri, arena);
+            }
         } else if (std.mem.eql(u8, method, "textDocument/didClose")) {
             const params_value = root.object.get("params") orelse return error.MissingParams;
             const params = try std.json.parseFromValue(
