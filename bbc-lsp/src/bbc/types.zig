@@ -512,9 +512,9 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
 }
 
 pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator, expType: Type) (std.mem.Allocator.Error || errors.bbcErrors)!void {
-    // Intercept inbuilt function calls — args with typed params get hints, Any params are unconstrained
-    if (value.func.* == .identifier and ctx.inbuilt_funcs.contains(value.func.identifier.name)) {
-        const indef = ctx.inbuilt_funcs.get(value.func.identifier.name).?;
+    // Intercept inbuilt function calls — args with typed params get hints, Any params are unconstrained.
+    // Works for plain identifiers (`print`) and namespaced access (`math.cos`).
+    if (analyser.resolveInbuiltFunc(value.func, ctx, allocator)) |indef| {
         var concrete_type = std.StringHashMap(*ast.Type).init(allocator);
         defer concrete_type.deinit();
         // Back-propagate: if the return type is a type param and we have an expected type, seed the map
@@ -1048,6 +1048,8 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 const left_value = try analyser.analyseValue(uop_right.expr, ctx, allocator);
                 if (left_value == .undecided)
                     try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
+                // Namespace member access (file import or inbuilt lib): no struct inference needed.
+                if (left_value.decided.base == .import_ns) return;
                 if (!ctx.typeDefExist(left_value.decided.base.name))
                     try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
             } else {

@@ -3,6 +3,7 @@ const parser = @import("parser.zig");
 const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
 const errors = @import("errors.zig");
+const InbuiltLibs = @import("inbuilt_libs.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -268,6 +269,14 @@ fn resolveImportsInternal(
         const inst = prog.instructions.items[i];
         switch (inst.*) {
             .ImportDef => |imp| {
+                // Bare names that match a known inbuilt library (e.g. "math") are kept as
+                // ImportDef nodes in the AST; the analyser and interpreter handle them.
+                if (InbuiltLibs.registry.has(imp.path)) {
+                    imp.is_inbuilt = true;
+                    i += 1;
+                    continue;
+                }
+
                 const abs_path = try std.fs.path.resolve(allocator, &.{ base_dir, imp.path });
 
                 if (visiting.contains(abs_path)) {

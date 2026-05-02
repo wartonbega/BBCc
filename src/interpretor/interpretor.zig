@@ -7,6 +7,7 @@ const Print = @import("../interpretor/print.zig");
 const Values = @import("../interpretor/values.zig");
 const ValueInterpretor = @import("valueInterpretor.zig");
 const InbuiltFuncs = @import("../inbuilt_funcs.zig");
+const InbuiltLibs = @import("../inbuilt_libs.zig");
 
 const debug_gc = @import("build_options").debug_gc;
 
@@ -252,6 +253,35 @@ fn interpreteProgramImpl(ast: *Ast.Program, cctx: *analyser.Context, alloc: std.
     const inbuilt_list = try InbuiltFuncs.load(alloc);
     for (inbuilt_list) |f|
         try ctx.setVariable(f.name, Values.Value{ .BuiltinFunction = f.name });
+
+    // Build a NamespaceObj for each inbuilt library import and register it under its alias.
+    for (ast.instructions.items) |inst| {
+        switch (inst.*) {
+            .ImportDef => |imp| {
+                if (!imp.is_inbuilt) continue;
+                const lib_config = InbuiltLibs.registry.get(imp.path) orelse continue;
+                const alias = imp.libname orelse imp.path;
+
+                const ns_obj = try heapAllocator.create(Values.NamespaceObj);
+                ns_obj.* = .{
+                    .name = try heapAllocator.dupe(u8, alias),
+                    .members = std.StringHashMap(Values.Value).init(heapAllocator),
+                    .references = 0,
+                };
+
+                // Parse function names from the lib config (prefixed with the original lib name
+                // so that dispatchBuiltin can route by lib name regardless of alias).
+                const lib_funcs = try InbuiltFuncs.loadFrom(alloc, lib_config, imp.path);
+                for (lib_funcs) |f| {
+                    const leaf = if (std.mem.lastIndexOf(u8, f.name, ".")) |d| f.name[d + 1 ..] else f.name;
+                    try ns_obj.members.put(leaf, .{ .BuiltinFunction = f.name });
+                }
+
+                try ctx.setVariable(alias, .{ .Namespace = ns_obj });
+            },
+            else => {},
+        }
+    }
 
     const main_func = cctx.getFunction("main");
     var child_ctx = ctx.createChild();

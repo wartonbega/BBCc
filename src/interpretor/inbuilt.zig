@@ -8,10 +8,23 @@ const Values = @import("values.zig");
 const Itpr = @import("interpretor.zig");
 const Parser = @import("../parser.zig");
 
+const math_lib = @import("inbuilt/math.zig");
+const os_lib = @import("inbuilt/os.zig");
+
 const Context = Itpr.Context;
 const Value = Values.Value;
 
 pub fn dispatchBuiltin(name: []const u8, args: std.ArrayList(Values.Value), ctx: *Itpr.Context, reference: Parser.Location) !Values.Value {
+    // Route namespaced calls (e.g. "math.cos") to the appropriate library dispatcher.
+    if (std.mem.indexOf(u8, name, ".")) |dot| {
+        const lib = name[0..dot];
+        const func = name[dot + 1 ..];
+        if (std.mem.eql(u8, lib, "math"))
+            return math_lib.dispatch(func, args.items, ctx, reference);
+        if (std.mem.eql(u8, lib, "os"))
+            return os_lib.dispatch(func, args.items, ctx, reference);
+        return try Values.makeError(ctx.heap, reference, "Unknown builtin library '{s}'", .{lib});
+    }
     if (std.mem.eql(u8, name, "input")) {
         if (args.items.len > 0) Print.print(args.items[0]);
         const stdin = std.io.getStdIn().reader();

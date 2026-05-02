@@ -1,0 +1,10 @@
+
+import("math") as math
+import("os") as os
+
+func main() !Int {
+    let b = math.cos
+    println(os.plateforme())
+    println(b(1.0))
+    0
+}

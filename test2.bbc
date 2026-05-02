@@ -16,7 +16,7 @@ func reduceDoubleSpace(String s) String {
     ret
 }
 
-func main() Int {
+func main() !Int {
     let a = read("test.bbc")
     let b = reduceDoubleSpace(a)
     for c: stringIterator(b) 

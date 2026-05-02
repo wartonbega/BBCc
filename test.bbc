@@ -12,6 +12,7 @@ func main() !Int {
         print(c)
     println('')
     
-    
+
+
     1
 }

@@ -6,6 +6,7 @@ const Traits = @import("traits.zig");
 const Parser = @import("parser.zig");
 const position = @import("position.zig");
 const InbuiltFuncs = @import("inbuilt_funcs.zig");
+const InbuiltLibs = @import("inbuilt_libs.zig");
 
 const exit = std.process.exit;
 
@@ -246,6 +247,8 @@ pub const Context = struct {
     pub fn addFunctionToCompile(self: *Context, func: functionVersion) !void {
         if (std.mem.eql(u8, func.name, "unknown") or std.mem.eql(u8, func.signature.fname, "unknown"))
             return;
+        // Inbuilt functions have no BBC AST — don't queue them for compilation.
+        if (self.inbuilt_funcs.contains(func.name)) return;
         if (self.parent) |parent| { // The root of the context tree
             try parent.addFunctionToCompile(func);
         } else try self.functions_to_compile.append(func);
@@ -516,8 +519,8 @@ fn analyseInbuiltFuncall(func_name: []const u8, func: *ast.Funcall, ctx: *Contex
 }
 
 pub fn analyseFuncall(func: *ast.Funcall, ctx: *Context, allocator: Allocator) !Types.Type {
-    if (func.func.* == .identifier and ctx.inbuilt_funcs.contains(func.func.identifier.name))
-        return try analyseInbuiltFuncall(func.func.identifier.name, func, ctx, allocator);
+    if (resolveInbuiltFunc(func.func, ctx, allocator)) |indef|
+        return try analyseInbuiltFuncall(indef.name, func, ctx, allocator);
 
     const f_signature = try analyseValue(func.func, ctx, allocator);
     switch (f_signature) {
@@ -788,6 +791,13 @@ pub fn analyseBinOp(op: ast.binOperator, ctx: *Context, rhsType: Types.Type, lhs
     return Types.Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
 }
 
+/// If `expr` refers to an inbuilt function (plain or namespaced), return its Func descriptor.
+/// Returns null for everything else.
+pub fn resolveInbuiltFunc(expr: *const ast.Value, ctx: *const Context, allocator: Allocator) ?InbuiltFuncs.Func {
+    const name = tryExtractQualifiedIdent(expr, allocator) orelse return null;
+    return ctx.inbuilt_funcs.get(name);
+}
+
 /// Recursively extract a flat dotted identifier from a value expression.
 /// Returns "math" for `identifier("math")`, "math" for `(math)`,
 /// "mathw.math" for `mathw.math` (unaryOperatorRight chain), etc.
@@ -887,8 +897,8 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
         .identifier => |ident| {
             if (ctx.functionExist(ident.name))
                 return Types.Type{ .decided = try createFunctionSignature(ctx.getFunction(ident.name), allocator) };
-            if (ctx.inbuilt_funcs.contains(ident.name))
-                return try Types.CreateTypeVoid(allocator, false);
+            if (ctx.inbuilt_funcs.get(ident.name)) |indef|
+                return Types.Type{ .decided = try createInbuiltFuncSignature(indef, allocator) };
             // Namespace identifier: `math` where math is an import namespace
             if (ctx.isNamespace(ident.name)) {
                 const ns_t = try allocator.create(ast.Type);
@@ -1098,6 +1108,8 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
                     if (ctx.functionExist(qualified)) {
                         return Types.Type{ .decided = try createFunctionSignature(ctx.getFunction(qualified), allocator) };
                     }
+                    if (ctx.inbuilt_funcs.get(qualified)) |indef|
+                        return Types.Type{ .decided = try createInbuiltFuncSignature(indef, allocator) };
                     // Qualified name is itself a namespace (e.g. `mathw.math`)
                     if (ctx.isNamespace(qualified)) {
                         const ns_t = try allocator.create(ast.Type);
@@ -1121,6 +1133,8 @@ pub fn analyseValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (std
                         ns_t.* = .{ .base = .{ .import_ns = qualified }, .err = false, .references = 0 };
                         return Types.Type{ .decided = ns_t };
                     }
+                    if (ctx.inbuilt_funcs.get(qualified)) |indef|
+                        return Types.Type{ .decided = try createInbuiltFuncSignature(indef, allocator) };
                     try ctx.Error("Namespace '{s}' has no member '{s}'", .{ ns_name, attr }, uop_right.reference);
                 }
                 // Buffer point access: only _size and _count are allowed
@@ -1367,6 +1381,32 @@ pub fn analyseScope(scope: *ast.Scope, ctx: *Context, allocator: Allocator) (std
         return ret;
     }
     return Types.CreateTypeVoid(allocator, false);
+}
+
+/// Build an ast.Type function signature from an inbuilt Func descriptor.
+/// Variadic params are dropped from the formal list (they're checked by analyseInbuiltFuncall).
+fn createInbuiltFuncSignature(func: InbuiltFuncs.Func, allocator: Allocator) !*ast.Type {
+    const functype = try allocator.create(ast.Type);
+    var argtypes = ArrayList(*ast.Type).init(allocator);
+    for (func.params) |param| {
+        if (param.variadic) break;
+        const arg_t = try allocator.create(ast.Type);
+        arg_t.* = .{ .base = .{ .name = param.type_name }, .err = false, .references = 0 };
+        try argtypes.append(arg_t);
+    }
+    const ret_t = try allocator.create(ast.Type);
+    ret_t.* = .{ .base = .{ .name = func.return_type }, .err = func.return_type_has_error, .references = 0 };
+    functype.* = .{
+        .base = .{ .function = ast.TypeFunc{
+            .argtypes = argtypes,
+            .retype = ret_t,
+            .typeparam = ArrayList(ast.TypeParam).init(allocator),
+            .fname = func.name,
+        } },
+        .err = false,
+        .references = 0,
+    };
+    return functype;
 }
 
 pub fn createFunctionSignature(func: *ast.funcDef, allocator: Allocator) !*ast.Type {
@@ -1876,6 +1916,22 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     try ctx.addTypeDef("String", string_type_def);
 
     try Traits.initBasicTraits(ctx, allocator);
+
+    // Inbuilt library imports: load signatures and register namespace.
+    for (prog.instructions.items) |inst| {
+        switch (inst.*) {
+            .ImportDef => |imp| {
+                if (!imp.is_inbuilt) continue;
+                const lib_config = InbuiltLibs.registry.get(imp.path) orelse continue;
+                const alias = imp.libname orelse imp.path;
+                const funcs = try InbuiltFuncs.loadFrom(allocator, lib_config, imp.path);
+                for (funcs) |f| try ctx.inbuilt_funcs.put(f.name, f);
+                try ctx.addNamespace(try allocator.dupe(u8, alias));
+            },
+            else => {},
+        }
+    }
+
     // First pass: register all top-level function definitions
     for (prog.instructions.items) |inst| {
         switch (inst.*) {
@@ -1986,7 +2042,7 @@ pub fn analyse(prog: *ast.Program, ctx: *Context, allocator: Allocator) !void {
     ctx.functions_to_compile = funcs_to_compile;
 
     if (!ctx.variableExist("main"))
-        try ctx.Error("Missing function 'main'", .{}, Parser.getInbuiltLocation());
+        return;
 
     switch (ctx.getVariable("main").decided.base) {
         .function => |f| {

@@ -267,6 +267,8 @@ pub const Value = union(enum) {
     }
 };
 
+/// Helpers
+///
 fn floatFromInt(i: i32) f64 {
     return @as(f64, @floatFromInt(i));
 }
@@ -278,6 +280,18 @@ pub fn makeError(alloc: std.mem.Allocator, reference: Parser.Location, comptime 
     return Value{ .Error = obj };
 }
 
+pub fn makeString(alloc: std.mem.Allocator, val: []const u8) !Value {
+    const obj = try alloc.create(StringObj);
+    obj.* = .{
+        .content = .init(alloc),
+        .references = 0,
+    };
+    try obj.content.appendSlice(val);
+    return Value{ .String = obj };
+}
+
+/// Operators
+///
 pub fn Plus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
     return switch (self) {
         .Int => |lhs| switch (other) {

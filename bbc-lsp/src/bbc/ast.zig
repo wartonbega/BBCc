@@ -596,6 +596,7 @@ pub const importDef = struct {
     path: []const u8,
     libname: ?[]const u8,
     reference: Parser.Location,
+    is_inbuilt: bool = false,
 };
 
 pub const ProgInstructions = union(enum) {

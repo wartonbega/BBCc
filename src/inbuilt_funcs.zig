@@ -18,9 +18,9 @@ pub const Func = struct {
 
 const config_text = @embedFile("inbuilt_funcs.config");
 
-pub fn load(allocator: std.mem.Allocator) ![]Func {
+fn parseConfig(allocator: std.mem.Allocator, text: []const u8, prefix: []const u8) ![]Func {
     var result = std.ArrayList(Func).init(allocator);
-    var lines = std.mem.splitScalar(u8, config_text, '\n');
+    var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw_line| {
         const line = std.mem.trim(u8, raw_line, " \t\r");
         if (line.len == 0 or line[0] == '#') continue;
@@ -30,7 +30,12 @@ pub fn load(allocator: std.mem.Allocator) ![]Func {
         const arrow = std.mem.indexOf(u8, line, "->") orelse continue;
         if (paren_close < paren_open or arrow < paren_close) continue;
 
-        const name = std.mem.trim(u8, line[0..paren_open], " \t");
+        const bare_name = std.mem.trim(u8, line[0..paren_open], " \t");
+        const name = if (prefix.len > 0)
+            try std.mem.concat(allocator, u8, &.{ prefix, ".", bare_name })
+        else
+            bare_name;
+
         const params_str = std.mem.trim(u8, line[paren_open + 1 .. paren_close], " \t");
         var ret_str = std.mem.trim(u8, line[arrow + 2 ..], " \t");
 
@@ -76,4 +81,13 @@ pub fn load(allocator: std.mem.Allocator) ![]Func {
         });
     }
     return result.toOwnedSlice();
+}
+
+pub fn load(allocator: std.mem.Allocator) ![]Func {
+    return parseConfig(allocator, config_text, "");
+}
+
+/// Parse `text` (same config syntax) and prefix every function name with `prefix + "."`.
+pub fn loadFrom(allocator: std.mem.Allocator, text: []const u8, prefix: []const u8) ![]Func {
+    return parseConfig(allocator, text, prefix);
 }
