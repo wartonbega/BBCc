@@ -1,0 +1,42 @@
+func fib(Int n) Int {
+    if n <= 1 {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+func gcd(Int a, Int b) Int {
+    if a == b {
+        a
+    } elif a > b {
+        gcd(a - b, b)
+    } else {
+        gcd(a, b - a)
+    }
+}
+
+func power(Int base, Int exp) Int {
+    if exp == 0 {
+        1
+    } else {
+        base * power(base, exp - 1)
+    }
+}
+
+func main() Int {
+    println(fib(0))
+    println(fib(1))
+    println(fib(5))
+    println(fib(8))
+
+    println(gcd(12, 8))
+    println(gcd(100, 25))
+    println(gcd(7, 3))
+
+    println(power(2, 0))
+    println(power(2, 8))
+    println(power(3, 4))
+
+    1
+}

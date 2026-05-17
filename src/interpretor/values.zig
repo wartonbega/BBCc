@@ -290,6 +290,16 @@ pub fn makeString(alloc: std.mem.Allocator, val: []const u8) !Value {
     return Value{ .String = obj };
 }
 
+pub fn valueToString(val: Value, allocator: std.mem.Allocator) !Value {
+    // TODO: Finish implementing that so it's like print(...)
+    return switch (val) {
+        .Bool => try makeString(allocator, if (val.Bool) "true" else "false"),
+        .Buffer => try makeString(allocator, "Buffer[...]"),
+        .BuiltinFunction => try makeString(allocator, "inbuiltFunction"),
+        else => unreachable,
+    };
+}
+
 /// Operators
 ///
 pub fn Plus(self: Value, other: Value, ctx: *Context, reference: Parser.Location) !Value {
@@ -319,7 +329,7 @@ pub fn Plus(self: Value, other: Value, ctx: *Context, reference: Parser.Location
                 try new_content.append(rhs);
                 const new_str = try ctx.heap.create(StringObj);
                 new_str.* = .{ .content = new_content, .references = 0 };
-                break :blk Value{ .String = lhs };
+                break :blk Value{ .String = new_str };
             },
             else => try makeError(ctx.heap, reference, "Cannot add {s} to String", .{other.getType()}),
         },

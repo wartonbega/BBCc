@@ -1,0 +1,23 @@
+struct Box {
+    Int x
+}
+
+trait Getter(Type) {
+    func get() Int
+}
+
+implement Getter: Box {
+    func get() Int {
+        self.x
+    }
+}
+
+func main() !Int {
+    let b = {
+        let t = @Box{ x = 42 }
+        t.get
+    }
+    let result = b()
+    println(result)
+    0
+}

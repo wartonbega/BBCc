@@ -1,0 +1,54 @@
+struct Counter {
+    Int value,
+    Int step
+}
+
+trait Add(Type) {
+    func add(Type other) Type
+}
+
+implement Add: Counter {
+    func add(Counter other) Counter {
+        @Counter{
+            value = self.value + other.value,
+            step = self.step
+        }
+    }
+}
+
+func makeCounter(Int start, Int step) Counter {
+    @Counter{ value = start, step = step }
+}
+
+func tick(Counter c) Counter {
+    @Counter{ value = c.value + c.step, step = c.step }
+}
+
+func tickN(Counter c, Int n) Counter {
+    let result = c
+    let i = 0
+    while i < n {
+        result = tick(result)
+        i = i + 1
+    }
+    result
+}
+
+func main() Int {
+    let c = makeCounter(0, 5)
+    println(c.value)
+    println(c.step)
+
+    let c2 = tick(c)
+    println(c2.value)
+
+    let c3 = tickN(c, 4)
+    println(c3.value)
+
+    let a = makeCounter(10, 1)
+    let b = makeCounter(20, 1)
+    let ab = a.add(b)
+    println(ab.value)
+
+    1
+}

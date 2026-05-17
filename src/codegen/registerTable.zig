@@ -1,6 +1,8 @@
 const std = @import("std");
 const inst = @import("instructions.zig");
+const arch_mod = @import("arch.zig");
 const Compiler = @import("compiler.zig").Compiler;
+const Ast = @import("../ast.zig");
 
 pub const regtableError = error{
     InvalidIndex,
@@ -15,6 +17,10 @@ pub const RegState = struct {
     spilled: bool = false,
     stack_slot: ?usize = null,
     freed: bool = false,
+    /// BBC type of the value held in this register. Set by codegenScope after
+    /// each codegenValue call so that GC decisions (discard path) can read the
+    /// type without re-querying the analyser context. Null when unknown.
+    bbc_type: ?*Ast.Type = null,
 
     pub fn init(reg: inst.Register) RegState {
         return .{ .reg = reg };
@@ -60,7 +66,7 @@ pub const RegisterTable = struct {
     /// Base register for stack access (typically RBP)
     stack_base: inst.Register = .RBP,
 
-    pub fn init(allocator: std.mem.Allocator) !RegisterTable {
+    pub fn init(allocator: std.mem.Allocator, arch: arch_mod.ArchConfig) !RegisterTable {
         var self = RegisterTable{
             .allocator = allocator,
             .free_regs = std.ArrayList(inst.Register).init(allocator),
@@ -69,10 +75,10 @@ pub const RegisterTable = struct {
             .free_slots = std.ArrayList(usize).init(allocator),
         };
 
-        for (inst.SCRATCH_REGS) |reg| {
+        for (arch.scratch_regs) |reg| {
             try self.free_regs.append(reg);
         }
-        self.initial_reg_count = inst.SCRATCH_REGS.len;
+        self.initial_reg_count = arch.scratch_regs.len;
 
         return self;
     }
@@ -165,6 +171,8 @@ pub const RegisterTable = struct {
         }
 
         rs.freed = true;
+        // Keep last_used coherent: if it pointed to this register, clear it.
+        if (self.last_used == idx) self.last_used = null;
     }
 
     /// Spill one live value to make a register available
@@ -238,5 +246,22 @@ pub const RegisterTable = struct {
     /// Get the maximum stack space needed for spills (in bytes)
     pub fn maxStackUsage(self: *RegisterTable) usize {
         return self.next_slot * 8;
+    }
+
+    /// Tag the BBC type of the value at `idx`. Called by codegenScope after
+    /// each codegenValue so the discard / GC paths can avoid re-querying cctx.
+    pub fn setType(self: *RegisterTable, idx: usize, t: *Ast.Type) void {
+        if (idx < self.states.items.len) {
+            self.states.items[idx].bbc_type = t;
+        }
+    }
+
+    /// Read the BBC type previously stored by setType. Returns null if the
+    /// register has been freed or the type was never set.
+    pub fn getType(self: *const RegisterTable, idx: usize) ?*Ast.Type {
+        if (idx >= self.states.items.len) return null;
+        const rs = &self.states.items[idx];
+        if (rs.freed) return null;
+        return rs.bbc_type;
     }
 };

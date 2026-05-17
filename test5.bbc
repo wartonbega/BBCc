@@ -1,0 +1,24 @@
+import("bbc-lib/Strings.bbc") as Strings
+
+func sumChars(String s) !Int {
+    let total = 0
+    for c: Strings.stringIterator(s)
+        total = total + 1
+    total
+}
+
+
+func main() !Int {
+    let s = "hello"
+    let n = sumChars(s)
+    println(n)
+
+    for c: Strings.stringIterator(s)
+        print(c)
+    println('')
+
+    
+
+    0
+}
+     

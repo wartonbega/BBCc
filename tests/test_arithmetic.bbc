@@ -1,0 +1,48 @@
+func abs(Int n) Int {
+    if n < 0 {
+        0 - n
+    } else {
+        n
+    }
+}
+
+func sign(Int n) Int {
+    if n > 0 {
+        1
+    } elif n < 0 {
+        0 - 1
+    } else {
+        0
+    }
+}
+
+func main() Int {
+    println(3 * 4 + 2)
+    println(10 - 3 * 2)
+    println(2 + 3 * 4 - 1)
+    println(100 / 4 + 5)
+    println(7 - 7)
+    println(0 - 5 + 3)
+
+    println(abs(7))
+    println(abs(0 - 7))
+    println(abs(0))
+
+    println(sign(10))
+    println(sign(0 - 3))
+    println(sign(0))
+
+    let a = 3
+    let b = 4
+    let c = a * a + b * b
+    println(c)
+
+    println(a == b)
+    println(a != b)
+    println(a < b)
+    println(a > b)
+    println(a <= 3)
+    println(b >= 5)
+
+    1
+}

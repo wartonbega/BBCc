@@ -95,6 +95,12 @@ pub fn CreateTypeBuffer(allocator: Allocator, elem_type: *ast.Type, err: bool) !
     return Type{ .decided = _type };
 }
 
+pub fn CreateTypeError(allocator: Allocator, err: bool) !Type {
+    const _type = try allocator.create(ast.Type);
+    _type.* = ast.Type{ .base = ast.TypeBase{ .name = "Int" }, .err = err, .references = @intCast(0) };
+    return Type{ .decided = _type };
+}
+
 pub fn duplicateWithErrorUnion(allocator: Allocator, base: *ast.Type, err: bool) !Type {
     const _type = try allocator.create(ast.Type);
     _type.* = base.*;
@@ -113,6 +119,14 @@ pub fn wrapWithErr(t: *ast.Type, allocator: Allocator) !*ast.Type {
     const et = try allocator.create(ast.Type);
     et.* = t.*;
     et.err = true;
+    return et;
+}
+
+pub fn wrapSetErr(t: *ast.Type, allocator: Allocator, err: bool) !*ast.Type {
+    if (t.err) return t;
+    const et = try allocator.create(ast.Type);
+    et.* = t.*;
+    et.err = err;
     return et;
 }
 
@@ -223,12 +237,13 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
         },
         .parenthesis => try getTypeOfValue(value.parenthesis, ctx, allocator),
         .identifier => |ident| blk: {
+            // Local variables and parameters take priority over functions of the same name
+            if (ctx.variableExist(ident.name))
+                break :blk ctx.getVariable(ident.name);
             if (ctx.functionExist(ident.name))
                 return Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident.name), allocator) };
             if (ctx.inbuilt_funcs.contains(ident.name))
                 break :blk try CreateTypeVoid(allocator, false);
-            if (ctx.variableExist(ident.name))
-                break :blk ctx.getVariable(ident.name);
             if (ctx.isNamespace(ident.name)) {
                 const ns_t = try allocator.create(ast.Type);
                 ns_t.* = .{ .base = .{ .import_ns = ident.name }, .err = false, .references = 0 };
@@ -242,12 +257,28 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
             if (func.func.* == .identifier and ctx.inbuilt_funcs.contains(func.func.identifier.name)) {
                 const indef = ctx.inbuilt_funcs.get(func.func.identifier.name).?;
                 var has_error = false;
-                for (func.args.items) |arg| {
+                var concrete_type = std.StringHashMap(*ast.Type).init(allocator);
+                defer concrete_type.deinit();
+                for (func.args.items, 0..) |arg, i| {
                     const at = try getTypeOfValue(arg, ctx, allocator);
                     if (at == .decided and at.decided.err) has_error = true;
+                    if (indef.params.len == 0) continue;
+                    const param_idx = if (i < indef.params.len) i else indef.params.len - 1;
+                    const param = indef.params[param_idx];
+                    if (param.is_type_param and at == .decided and !concrete_type.contains(param.type_name))
+                        try concrete_type.put(param.type_name, at.decided);
+                }
+                const err_flag = indef.return_type_has_error or if (indef.propagate_errors) has_error else false;
+                if (indef.return_is_type_param) {
+                    if (concrete_type.get(indef.return_type)) |bound| {
+                        const ret = try allocator.create(ast.Type);
+                        ret.* = .{ .base = bound.base, .err = err_flag, .references = 0 };
+                        break :blk Type{ .decided = ret };
+                    }
+                    break :blk Type{ .undecided = ArrayList(Traits.Trait).init(allocator) };
                 }
                 const ret = try allocator.create(ast.Type);
-                ret.* = .{ .base = .{ .name = indef.return_type }, .err = if (indef.propagate_errors) has_error else false, .references = 0 };
+                ret.* = .{ .base = .{ .name = indef.return_type }, .err = err_flag, .references = 0 };
                 break :blk Type{ .decided = ret };
             }
             // We have to borrow a the majority of the code from analyse.analysefuncall,
@@ -552,7 +583,8 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
     var func_version = std.hash_map.StringHashMap(Type).init(allocator);
     if (value.args.items.len != signature.argtypes.items.len)
         try ctx.Error("The number of arguments ({d}) does not match the function's ({d})", .{ value.args.items.len, signature.argtypes.items.len }, value.func.getReference());
-    for (value.args.items, signature.argtypes.items) |arg, t| {
+    for (value.args.items, signature.argtypes.items) |arg, t_before_error| {
+        const t = try wrapSetErr(t_before_error, allocator, expType.decided.err);
         const argtype = try getTypeOfValue(arg, ctx, allocator);
         const is_type_param = t.base == .name and analyser.typeparamContains(signature.typeparam, t.base.name);
         const is_buffer_of_type_param = t.base == .buffer and
@@ -634,7 +666,7 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
             try ctx.Error("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, value.func.getReference());
 
         if (!func_version.get(ret_type.name).?.match(expType.decided))
-            try ctx.Error("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, value.func.getReference());
+            try ctx.Error("Expected type {s}, but the function '{s}' returns type {s}", .{ expType.toString(allocator), signature.fname, signature.retype.toString(allocator) }, value.func.getReference());
     } else if (ret_type == .generic) {
         var resolved_params = ArrayList(*ast.Type).init(allocator);
         for (ret_type.generic.params.items) |param| {
@@ -649,9 +681,9 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
         const resolved_type = try allocator.create(ast.Type);
         resolved_type.* = ast.Type{ .base = .{ .name = spec_name }, .err = signature.retype.err, .references = 0 };
         if (!expType.match(resolved_type))
-            try ctx.Error("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), spec_name }, value.func.getReference());
+            try ctx.Error("Expected type {s}, but the function '{s}' returns type {s}", .{ expType.toString(allocator), signature.fname, spec_name }, value.func.getReference());
     } else if (!signature.retype.match(expType.decided))
-        try ctx.Error("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, value.func.getReference());
+        try ctx.Error("Expected type {s}, but the function '{s}' returns type {s}", .{ expType.toString(allocator), signature.fname, signature.retype.toString(allocator) }, value.func.getReference());
 
     try ctx.addFunctionToCompile(analyser.functionVersion{
         .name = signature.fname,
@@ -689,8 +721,9 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                     if (func.signature.argtypes.items.len != 1)
                         try ctx.Error("The function {s} does not have enough arguments", .{func.name}, rhsValue.getReference());
                     const arg_type = func.signature.argtypes.items[0];
-                    if (rhsType.match(arg_type))
-                        //try ctx.Error("The types of the argument and the value does not match, expected '{s}' got '{s}'", .{ arg_type.toString(allocator), rhsType.toString(allocator) }, "");
+                    // Strip error flag for compatibility — errors propagate to result
+                    const rhs_bare = try duplicateWithErrorUnion(allocator, rhsType.decided, false);
+                    if ((Type{ .decided = rhs_bare.decided }).match(arg_type))
                         found = true;
                 },
                 .undecided => |rhs_traits| {
@@ -757,7 +790,8 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                             if (func.signature.argtypes.items.len != 1)
                                 continue;
                             const arg_type = func.signature.argtypes.items[0];
-                            if (rhsType.match(arg_type)) {
+                            const rhs_bare = try duplicateWithErrorUnion(allocator, rhsType.decided, false);
+                            if ((Type{ .decided = rhs_bare.decided }).match(arg_type)) {
                                 selected_func = func;
                                 break;
                             }
@@ -825,13 +859,13 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 rhs_type.err = false;
                 break :blk Type{ .decided = rhs_type };
             } else expType; // We can just set it without copying, it's alright
-            if (ctx.functionExist(ident.name)) {
-                const f_type = Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident.name), allocator) };
-                if (!f_type.matchType(real_exp_type))
-                    try ctx.Error("The expected type {s} does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, ctx.getVariable(ident.name).toString(allocator) }, ident.reference);
-                return;
-            }
-            if (ctx.isNamespace(ident.name)) return; // namespace identifier: valid without variable slot
+            // if (ctx.functionExist(ident.name)) {
+            //     const f_type = Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident.name), allocator) };
+            //     if (!f_type.matchType(real_exp_type))
+            //         try ctx.Error("The expected type {s} does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, ctx.getVariable(ident.name).toString(allocator) }, ident.reference);
+            //     return;
+            // }
+            // if (ctx.isNamespace(ident.name)) return; // namespace identifier: valid without variable slot
             if (!ctx.variableExist(ident.name))
                 try ctx.Error("The variable {s} is not declared (infer)", .{ident.name}, ident.reference);
             if (!ctx.getVariable(ident.name).matchType(real_exp_type))
@@ -1048,10 +1082,13 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 const left_value = try analyser.analyseValue(uop_right.expr, ctx, allocator);
                 if (left_value == .undecided)
                     try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
-                // Namespace member access (file import or inbuilt lib): no struct inference needed.
-                if (left_value.decided.base == .import_ns) return;
-                if (!ctx.typeDefExist(left_value.decided.base.name))
-                    try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
+                switch (left_value.decided.base) {
+                    .import_ns => return, // Namespace member access: no struct inference needed
+                    .buffer => return, // Buffer: ._size / ._count are built-in, no struct inference needed
+                    .name => |n| if (!ctx.typeDefExist(n))
+                        try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference),
+                    else => {},
+                }
             } else {
                 unreachable;
             }

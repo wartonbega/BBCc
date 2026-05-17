@@ -1,4 +1,4 @@
-func main() Int {
+func main() !Int {
     let s = "hello"
     let c = s[0]
     println(c)

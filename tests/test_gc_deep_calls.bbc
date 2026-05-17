@@ -1,0 +1,47 @@
+// GC stress: deep call chain passing heap objects (Buffer<Int>) through
+// multiple function frames, each creating intermediate allocations.
+// Verifies scope-exit GC runs correctly at every frame, not just the leaf.
+
+func makeRange(Int n) [Int] {
+    let buf = @[#Int n]
+    let i = 0
+    while i < n {
+        buf[i] = i + 1
+        i = i + 1
+    }
+    buf
+}
+
+func sumBuf([Int] b) Int {
+    let s = 0
+    let i = 0
+    while i < b._size {
+        s = s + b[i]
+        i = i + 1
+    }
+    s
+}
+
+func doubleSum([Int] b) Int {
+    // Creates a fresh doubled buffer — the intermediate alloc must be freed.
+    let doubled = @[#Int b._size]
+    let i = 0
+    while i < b._size {
+        doubled[i] = b[i] * 2
+        i = i + 1
+    }
+    sumBuf(doubled)
+}
+
+func tripleChain(Int n) Int {
+    let r1 = makeRange(n)
+    let r2 = makeRange(n * 2)
+    doubleSum(r1) + sumBuf(r2)
+}
+
+func main() Int {
+    println(tripleChain(3))   // doubleSum([1,2,3])=12  + sum([1..6])=21 → 33
+    println(tripleChain(4))   // doubleSum([1..4])=20   + sum([1..8])=36 → 56
+    println(tripleChain(5))   // doubleSum([1..5])=30   + sum([1..10])=55 → 85
+    1
+}

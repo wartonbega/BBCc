@@ -1,0 +1,21 @@
+// tests the garbage collector
+
+
+struct Toto {
+    Int a,
+    Int b
+}
+
+
+// This loop executes and should have a constant memory in `top`
+func main() !Int {
+    while true {
+        let t = @Toto{
+            a = 1,
+            b = 2
+        }
+        println(t.a)
+        let b = "test"
+    }
+    0
+}

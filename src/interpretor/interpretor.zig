@@ -72,10 +72,13 @@ pub const Context = struct {
     pub fn setVariableOpt(self: *Context, name: []const u8, value: Values.Value) !bool {
         if (self.variables.contains(name)) {
             value.incrementReference();
-            if (try self.variables.fetchPut(name, value)) |old_entry| {
-                old_entry.value.decrementReference(self.heap);
+            if (self.variables.get(name)) |old_value| {
+                if (!std.mem.eql(u8, old_value.getType(), value.getType()))
+                    return false;
+                old_value.decrementReference(self.heap);
+                try self.variables.put(name, value);
+                return true;
             }
-            return true;
         }
         if (self.parent) |parent| {
             return parent.setVariableOpt(name, value);

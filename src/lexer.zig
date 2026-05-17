@@ -660,65 +660,60 @@ pub fn lexeValue6(reader: *tokenReader, allocator: Allocator) !*ast.Value {
 }
 
 pub fn lexeValue4(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // Value4:
-    //  | Value5 TIMES Value4
-    //  | Value5 DIV   Value4
-    //  | Value5
-    const lhs = try lexeValue6(reader, allocator);
-    if (!reader.canPeek())
-        return lhs;
-    switch ((try reader.peek()).type) {
-        TokenType.TIMES, TokenType.DIV => |optype| {
-            _ = (try reader.consume(optype));
-            const rhs = try lexeValue4(reader, allocator);
-            const ret = try allocator.create(ast.Value);
-            const operation = try allocator.create(ast.binaryOperation);
-            operation.* = ast.binaryOperation{
-                .lhs = lhs,
-                .rhs = rhs,
-                .operator = switch (optype) {
-                    TokenType.DIV => ast.binOperator.Div,
-                    TokenType.TIMES => ast.binOperator.Times,
-                    else => ast.binOperator.Times, // We need a default value
-                },
-                .reference = lhs.getReference().unionWith(rhs.getReference()),
-            };
-            ret.* = ast.Value{ .binaryOperator = operation };
-            return ret;
-        },
-        else => return lhs,
+    // Value4 (left-associative): a*b*c => (a*b)*c
+    var lhs = try lexeValue6(reader, allocator);
+    while (reader.canPeek()) {
+        switch ((try reader.peek()).type) {
+            TokenType.TIMES, TokenType.DIV, TokenType.MODULUS => |optype| {
+                _ = (try reader.consume(optype));
+                const rhs = try lexeValue6(reader, allocator);
+                const ret = try allocator.create(ast.Value);
+                const operation = try allocator.create(ast.binaryOperation);
+                operation.* = ast.binaryOperation{
+                    .lhs = lhs,
+                    .rhs = rhs,
+                    .operator = switch (optype) {
+                        TokenType.DIV => ast.binOperator.Div,
+                        TokenType.TIMES => ast.binOperator.Times,
+                        TokenType.MODULUS => ast.binOperator.Modulus,
+                        else => ast.binOperator.Times,
+                    },
+                    .reference = lhs.getReference().unionWith(rhs.getReference()),
+                };
+                ret.* = ast.Value{ .binaryOperator = operation };
+                lhs = ret;
+            },
+            else => break,
+        }
     }
     return lhs;
 }
 
 pub fn lexeValue3(reader: *tokenReader, allocator: Allocator) !*ast.Value {
-    // Value3:
-    //  | Value4 PLUS  Value3
-    //  | Value4 MINUS Value3
-    //  | Value4
-    const lhs = try lexeValue4(reader, allocator);
-    if (!reader.canPeek())
-        return lhs;
-    switch ((try reader.peek()).type) {
-        TokenType.PLUS, TokenType.MINUS => |optype| {
-            _ = (try reader.consume(optype));
-            const rhs = try lexeValue3(reader, allocator);
-            const ret = try allocator.create(ast.Value);
-            const operation = try allocator.create(ast.binaryOperation);
-            operation.* = ast.binaryOperation{
-                .lhs = lhs,
-                .rhs = rhs,
-                .operator = switch (optype) {
-                    TokenType.PLUS => ast.binOperator.Plus,
-                    TokenType.MINUS => ast.binOperator.Minus,
-                    else => ast.binOperator.Minus, // We need a default value
-                },
-                .reference = lhs.getReference().unionWith(rhs.getReference()),
-            };
-            ret.* = ast.Value{ .binaryOperator = operation };
-            return ret;
-        },
-        else => return lhs,
+    // Value3 (left-associative): a-b-c => (a-b)-c
+    var lhs = try lexeValue4(reader, allocator);
+    while (reader.canPeek()) {
+        switch ((try reader.peek()).type) {
+            TokenType.PLUS, TokenType.MINUS => |optype| {
+                _ = (try reader.consume(optype));
+                const rhs = try lexeValue4(reader, allocator);
+                const ret = try allocator.create(ast.Value);
+                const operation = try allocator.create(ast.binaryOperation);
+                operation.* = ast.binaryOperation{
+                    .lhs = lhs,
+                    .rhs = rhs,
+                    .operator = switch (optype) {
+                        TokenType.PLUS => ast.binOperator.Plus,
+                        TokenType.MINUS => ast.binOperator.Minus,
+                        else => ast.binOperator.Minus,
+                    },
+                    .reference = lhs.getReference().unionWith(rhs.getReference()),
+                };
+                ret.* = ast.Value{ .binaryOperator = operation };
+                lhs = ret;
+            },
+            else => break,
+        }
     }
     return lhs;
 }
@@ -733,33 +728,33 @@ pub fn lexeValue2(reader: *tokenReader, allocator: Allocator) (lexerErrors || st
     //  | Value3 > Value2
     //  | Value3
 
-    const lhs = try lexeValue3(reader, allocator);
-    if (!reader.canPeek())
-        return lhs;
-    switch ((try reader.peek()).type) {
-        TokenType.DBL_EQUAL, TokenType.NOT_EQUAL, TokenType.LESS_THAN, TokenType.MORE_THAN, TokenType.MORE_THAN_EQ, TokenType.LESS_THAN_EQ => |optype| {
-            _ = (try reader.consume(optype));
-            const rhs = try lexeValue2(reader, allocator);
-            const ret = try allocator.create(ast.Value);
-            const operation = try allocator.create(ast.binaryOperation);
-            operation.* = ast.binaryOperation{
-                .lhs = lhs,
-                .rhs = rhs,
-                .operator = switch (optype) {
-                    TokenType.DBL_EQUAL => ast.binOperator.Equal,
-                    TokenType.NOT_EQUAL => ast.binOperator.NotEqual,
-                    TokenType.LESS_THAN => ast.binOperator.Lt,
-                    TokenType.MORE_THAN => ast.binOperator.Gt,
-                    TokenType.MORE_THAN_EQ => ast.binOperator.Ge,
-                    TokenType.LESS_THAN_EQ => ast.binOperator.Le,
-                    else => ast.binOperator.Equal,
-                },
-                .reference = lhs.getReference().unionWith(rhs.getReference()),
-            };
-            ret.* = ast.Value{ .binaryOperator = operation };
-            return ret;
-        },
-        else => return lhs,
+    var lhs = try lexeValue3(reader, allocator);
+    while (reader.canPeek()) {
+        switch ((try reader.peek()).type) {
+            TokenType.DBL_EQUAL, TokenType.NOT_EQUAL, TokenType.LESS_THAN, TokenType.MORE_THAN, TokenType.MORE_THAN_EQ, TokenType.LESS_THAN_EQ => |optype| {
+                _ = (try reader.consume(optype));
+                const rhs = try lexeValue3(reader, allocator);
+                const ret = try allocator.create(ast.Value);
+                const operation = try allocator.create(ast.binaryOperation);
+                operation.* = ast.binaryOperation{
+                    .lhs = lhs,
+                    .rhs = rhs,
+                    .operator = switch (optype) {
+                        TokenType.DBL_EQUAL => ast.binOperator.Equal,
+                        TokenType.NOT_EQUAL => ast.binOperator.NotEqual,
+                        TokenType.LESS_THAN => ast.binOperator.Lt,
+                        TokenType.MORE_THAN => ast.binOperator.Gt,
+                        TokenType.MORE_THAN_EQ => ast.binOperator.Ge,
+                        TokenType.LESS_THAN_EQ => ast.binOperator.Le,
+                        else => ast.binOperator.Equal,
+                    },
+                    .reference = lhs.getReference().unionWith(rhs.getReference()),
+                };
+                ret.* = ast.Value{ .binaryOperator = operation };
+                lhs = ret;
+            },
+            else => break,
+        }
     }
     return lhs;
 }
@@ -770,29 +765,29 @@ pub fn lexeValue_Or_And(reader: *tokenReader, allocator: Allocator) !*ast.Value 
     //  | Value2 != ValueOrAnd
     //  | Value2
 
-    const lhs = try lexeValue2(reader, allocator);
-    if (!reader.canPeek())
-        return lhs;
-    switch ((try reader.peek()).type) {
-        TokenType.AND, TokenType.OR => |optype| {
-            _ = (try reader.consume(optype));
-            const rhs = try lexeValue_Or_And(reader, allocator);
-            const ret = try allocator.create(ast.Value);
-            const operation = try allocator.create(ast.binaryOperation);
-            operation.* = ast.binaryOperation{
-                .lhs = lhs,
-                .rhs = rhs,
-                .operator = switch (optype) {
-                    TokenType.AND => ast.binOperator.And,
-                    TokenType.OR => ast.binOperator.Or,
-                    else => ast.binOperator.And,
-                },
-                .reference = lhs.getReference().unionWith(rhs.getReference()),
-            };
-            ret.* = ast.Value{ .binaryOperator = operation };
-            return ret;
-        },
-        else => return lhs,
+    var lhs = try lexeValue2(reader, allocator);
+    while (reader.canPeek()) {
+        switch ((try reader.peek()).type) {
+            TokenType.AND, TokenType.OR => |optype| {
+                _ = (try reader.consume(optype));
+                const rhs = try lexeValue2(reader, allocator);
+                const ret = try allocator.create(ast.Value);
+                const operation = try allocator.create(ast.binaryOperation);
+                operation.* = ast.binaryOperation{
+                    .lhs = lhs,
+                    .rhs = rhs,
+                    .operator = switch (optype) {
+                        TokenType.AND => ast.binOperator.And,
+                        TokenType.OR => ast.binOperator.Or,
+                        else => ast.binOperator.And,
+                    },
+                    .reference = lhs.getReference().unionWith(rhs.getReference()),
+                };
+                ret.* = ast.Value{ .binaryOperator = operation };
+                lhs = ret;
+            },
+            else => break,
+        }
     }
     return lhs;
 }

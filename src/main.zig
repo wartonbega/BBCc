@@ -9,7 +9,10 @@ const imports = @import("imports.zig");
 const codegen = @import("codegen.zig");
 const interpretor = @import("interpretor/interpretor.zig");
 const x86 = @import("codegen/x86.zig");
+const arm64 = @import("codegen/arm64.zig");
 const Compiler = @import("codegen/compiler.zig").Compiler;
+const arch_mod = @import("codegen/arch.zig");
+const build_options = @import("build_options");
 
 const std = @import("std");
 const Io = std.io;
@@ -47,10 +50,22 @@ pub fn main() !void {
         std.debug.print("------- Output of programme -------\n", .{});
         try interpretor.interpreteProgram(prog, ctx, arena.allocator());
     } else {
-        const compiler = try Compiler.init(alloc);
+        const arch = if (std.mem.eql(u8, build_options.target_arch, "arm64"))
+            arch_mod.ArchConfig.forArm64()
+        else
+            arch_mod.ArchConfig.forX86_64();
+        const compiler = try Compiler.init(alloc, arch);
         std.log.info("Compiling the program", .{});
         try codegen.generateProgram(prog, compiler, ctx);
-        std.log.info("Generating assembly for X86", .{});
-        try x86.dumpAssemblyX86(compiler, Compiler.getMainWrapper());
+        switch (arch.target) {
+            .x86_64 => {
+                std.log.info("Generating assembly for x86_64", .{});
+                try x86.dumpAssemblyX86(compiler, compiler.getMainWrapper());
+            },
+            .arm64 => {
+                std.log.info("Generating assembly for arm64", .{});
+                try arm64.dumpAssemblyArm64(compiler, compiler.getMainWrapper());
+            },
+        }
     }
 }

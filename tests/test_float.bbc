@@ -1,0 +1,18 @@
+func main() Int {
+    let a = 3.75
+    let b = 1.25
+
+    println(a + b)
+    println(a - b)
+    println(a * b)
+    println(a / b)
+
+    println(a < b)
+    println(a > b)
+    println(a == b)
+    println(a != b)
+    println(a <= a)
+    println(b >= a)
+
+    1
+}

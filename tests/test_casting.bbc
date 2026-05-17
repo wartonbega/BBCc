@@ -1,0 +1,41 @@
+import("cast") as cast
+
+func main() !Int {
+    println("--- cast.int ---")
+    println(cast.int(42))       // Int -> Int   : 42
+    println(cast.int('A'))      // Char -> Int  : 65
+    println(cast.int(true))     // Bool -> Int  : 1
+    println(cast.int(false))    // Bool -> Int  : 0
+    println(cast.int(3.7))      // Float -> Int : 3
+
+    println("--- cast.float ---")
+    println(cast.float(42))     // Int -> Float  : 42
+    println(cast.float('A'))    // Char -> Float : 65
+    println(cast.float(true))   // Bool -> Float : 1
+    println(cast.float(false))  // Bool -> Float : 0
+    println(cast.float(3.7))    // Float -> Float: 3.7
+
+    println("--- cast.bool ---")
+    println(cast.bool(1))       // Int -> Bool  : true
+    println(cast.bool(0))       // Int -> Bool  : false
+    println(cast.bool('a'))     // Char -> Bool : true  (>= 1)
+    println(cast.bool(true))    // Bool -> Bool : true
+    println(cast.bool(false))   // Bool -> Bool : false
+    println(cast.bool(1.5))     // Float -> Bool: true  (>= 1.0)
+    println(cast.bool(0.5))     // Float -> Bool: false (< 1.0)
+
+    println("--- cast.char ---")
+    println(cast.char('A'))     // Char -> Char : A
+    println(cast.char(65))      // Int -> Char  : A
+    println(cast.char(66))      // Int -> Char  : B
+    println(cast.char(true)) ? err { }
+    println(cast.char(65.5)) ? err { }
+
+    println("--- cast.string ---")
+    println(cast.string("hello"))   // String -> String: hello
+    println(cast.string(42))        // Int -> String   : 42
+    println(cast.string(3.14))      // Float -> String : 3.14
+    println(cast.string(true))      // Bool -> String  : true
+    println(cast.string(false))     // Bool -> String  : false
+    println(cast.string('Z'))       // Char -> String  : Z
+}

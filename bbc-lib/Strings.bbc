@@ -26,3 +26,13 @@ func stringIterator(String arg) StringIterator<Char> {
         param = '0'
     }
 }
+
+func truncate(String arg, Int min, Int max) !String {
+    let ret = ""
+    let i = min
+    while i < max {
+        ret = ret + arg[i]
+        i = i + 1
+    }
+    ret
+}

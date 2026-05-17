@@ -35,14 +35,7 @@ func <Type: Add> rampe(Int size, Type begin) List<Type> {
     ret
 }
 
-trait Iter(Type<Retype>) {
-    func next() Retype
-
-    func isLast() Bool
-}
-
-
-implement Iter: List<Type> {
+implement iterators.Iter: List<Type> {
     func next() Type {
         self.count = self.count + 1
         self.v[self.count - 1]
@@ -71,4 +64,49 @@ implement IndexSet: List<Type> {
     func set(Int i, Type value) !Void {
         self.v[i] = value
     }
+}
+
+/// Algorithms on buffers
+
+// Bubble sort (for now)
+// [TODO]: Change this to a quicksort or equal
+func <Type: GrEq> sort([Type] list) !Void {
+    let n = list._size
+    let i = 0
+    while i < n {
+        let j = 0
+        while j < n - i - 1 {
+            if list[j] >= list[j + 1] {
+                let temp = list[j]
+                list[j] = list[j + 1]
+                list[j + 1] = temp
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+func <Type: GrEq> min([Type] list) !Type {
+    if list._size == 0 
+        error("Cannot find the min of an empty list")
+
+    let m = list[0]
+    for elem: list {
+        if m >= elem 
+            m = elem
+    }
+    m
+}
+
+func <Type: GrEq> max([Type] list) !Type {
+    if list._size == 0 
+        error("Cannot find the max of an empty list")
+
+    let m = list[0]
+    for elem: list {
+        if elem >= m
+            m = elem
+    }
+    m   
 }

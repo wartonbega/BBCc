@@ -38,7 +38,7 @@ fn prefixTypeRef(
         .buffer => |elem| {
             try prefixTypeRef(elem, libname, localNames, allocator);
         },
-        .function => |*f| {
+        .function, .bound_method => |*f| {
             try prefixTypeRef(f.retype, libname, localNames, allocator);
             for (f.argtypes.items) |argtype| {
                 try prefixTypeRef(argtype, libname, localNames, allocator);

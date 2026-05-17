@@ -16,14 +16,18 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const debug_gc_val = b.option(bool, "debug-gc", "Back the arena with GPA instead of page_allocator (enables memory safety checks)") orelse false;
+    const target_arch_val = b.option([]const u8, "target-arch", "Target architecture: x86_64 (default) or arm64") orelse "x86_64";
     const options_step = b.addOptions();
     options_step.addOption(bool, "debug_gc", debug_gc_val);
+    options_step.addOption([]const u8, "target_arch", target_arch_val);
 
     // The rest of the compiler
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        // .optimize = .ReleaseFast,
+        .optimize = .Debug,
+        // .optimize = .ReleaseFast,
     });
     exe_mod.addImport("build_options", options_step.createModule());
 

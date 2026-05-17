@@ -1,18 +1,11 @@
 import("bbc-lib/Iterators.bbc") as Iterators
+import("bbc-lib/Buffer.bbc")
+
 
 func main() !Int {
-    let b = Iterators.Range(0, 10)
-    let a = Iterators.Range('a', 'k')
-    
-    for c: b
-        print(c)
-    println('')
-
-    for c: a
-        print(c)
-    println('')
-    
-
-
-    1
+    let a = @[1, 2, 3, 4, 2, 1, 1]
+    sort(a)
+    println(max(a))
+    println(min(a))
+    0
 }

@@ -1,0 +1,54 @@
+struct Point {
+    Int x,
+    Int y,
+}
+
+func add(Int a, Int b) !Int {
+    a + b
+}
+
+func factorial(Int n) !Int {
+    let acc = 1
+    let i = 1
+    while i <= n {
+        acc = acc * i
+        i = i + 1
+    }
+    acc
+}
+
+func sumBuffer([Int] buf) !Int {
+    let s = 0
+    let i = 0
+    let n = buf._size
+    while i < n {
+        s = s + buf[i]
+        i = i + 1
+    }
+    s
+}
+
+func main() !Int {
+    let x = add(3, 4)
+    println(x)
+
+    let f = factorial(5)
+    println(f)
+
+    let buf = @[10, 20, 30, 40, 50]
+    let total = sumBuffer(buf)
+    println(total)
+
+    let p = @Point{ x = 7, y = 13 }
+    let px = p.x
+    println(px)
+
+    let a = if x > 5 {
+        100
+    } else {
+        200
+    }
+    println(a)
+
+    0
+}

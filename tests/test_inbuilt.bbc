@@ -1,0 +1,8 @@
+func main() Int {
+    println(min(5, 3, 7, 1))
+    println(max(5, 3, 7, 1))
+    println(min(42, 42))
+    println(zeroOf(42))
+    println(unitOf(0))
+    0
+}

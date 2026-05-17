@@ -89,6 +89,12 @@ pub fn CreateTypeVoid(allocator: Allocator, err: bool) !Type {
     return Type{ .decided = _type };
 }
 
+pub fn CreateTypeError(allocator: Allocator, err: bool) !Type {
+    const _type = try allocator.create(ast.Type);
+    _type.* = ast.Type{ .base = ast.TypeBase{ .name = "Int" }, .err = err, .references = @intCast(0) };
+    return Type{ .decided = _type };
+}
+
 pub fn CreateTypeBuffer(allocator: Allocator, elem_type: *ast.Type, err: bool) !Type {
     const _type = try allocator.create(ast.Type);
     _type.* = ast.Type{ .base = ast.TypeBase{ .buffer = elem_type }, .err = err, .references = 0 };
@@ -116,6 +122,14 @@ pub fn wrapWithErr(t: *ast.Type, allocator: Allocator) !*ast.Type {
     return et;
 }
 
+pub fn wrapSetErr(t: *ast.Type, allocator: Allocator, err: bool) !*ast.Type {
+    if (t.err) return t;
+    const et = try allocator.create(ast.Type);
+    et.* = t.*;
+    et.err = err;
+    return et;
+}
+
 ///////////////////////////////////////////////////
 ///                                             ///
 ///////////////////////////////////////////////////
@@ -125,7 +139,8 @@ pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Conte
     if (functype.typeparam.items.len == 0) // No need to try to analyse everything
         return func_version;
     for (func.args.items, functype.argtypes.items) |a, b| {
-        const argtype = try getTypeOfValue(a, ctx, allocator);
+        const argtype_with_error = try getTypeOfValue(a, ctx, allocator);
+        const argtype = try duplicateWithErrorUnion(allocator, argtype_with_error.decided, false);
         const is_type_param = b.*.base == .name and analyser.typeparamContains(functype.typeparam, b.base.name);
         const is_buffer_of_type_param = b.*.base == .buffer and
             b.base.buffer.base == .name and
@@ -181,6 +196,18 @@ pub fn getFuncallVersion(func: *ast.Funcall, functype: ast.TypeFunc, ctx: *Conte
                         }
                     }
                 }
+            } else if (any_tp and argtype == .decided and argtype.decided.base == .generic) {
+                const arg_gen = argtype.decided.base.generic;
+                if (std.mem.eql(u8, arg_gen.name, generic.name)) {
+                    for (generic.params.items, 0..) |param, i| {
+                        if (param.base != .name) continue;
+                        const func_tp_name = param.base.name;
+                        if (!analyser.typeparamContains(functype.typeparam, func_tp_name)) continue;
+                        if (i >= arg_gen.params.items.len) continue;
+                        if (!func_version.contains(func_tp_name))
+                            try func_version.put(func_tp_name, Type{ .decided = arg_gen.params.items[i] });
+                    }
+                }
             }
         } else if (!argtype.decided.match(b)) {
             try ctx.Error("The argument of type '{s}' don't match the expected type '{s}'", .{ argtype.toString(allocator), b.toString(allocator) }, a.getReference());
@@ -223,12 +250,13 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
         },
         .parenthesis => try getTypeOfValue(value.parenthesis, ctx, allocator),
         .identifier => |ident| blk: {
+            // Local variables and parameters take priority over functions of the same name
+            if (ctx.variableExist(ident.name))
+                break :blk ctx.getVariable(ident.name);
             if (ctx.functionExist(ident.name))
                 return Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident.name), allocator) };
             if (ctx.inbuilt_funcs.contains(ident.name))
                 break :blk try CreateTypeVoid(allocator, false);
-            if (ctx.variableExist(ident.name))
-                break :blk ctx.getVariable(ident.name);
             if (ctx.isNamespace(ident.name)) {
                 const ns_t = try allocator.create(ast.Type);
                 ns_t.* = .{ .base = .{ .import_ns = ident.name }, .err = false, .references = 0 };
@@ -238,9 +266,8 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
         },
         .scope => try getTypeOfScope(value.scope, ctx, allocator),
         .funcall => |func| blk: {
-            // Intercept inbuilt function calls
-            if (func.func.* == .identifier and ctx.inbuilt_funcs.contains(func.func.identifier.name)) {
-                const indef = ctx.inbuilt_funcs.get(func.func.identifier.name).?;
+            // Intercept inbuilt function calls (plain or namespace-qualified)
+            if (analyser.resolveInbuiltFunc(func.func, ctx, allocator)) |indef| {
                 var has_error = false;
                 var concrete_type = std.StringHashMap(*ast.Type).init(allocator);
                 defer concrete_type.deinit();
@@ -278,13 +305,18 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
                         .buffer => try ctx.Error("Can't call a buffer value", .{}, func.func.getReference()),
                         .generic => |g| try ctx.Error("Can't call a generic type '{s}'", .{g.name}, func.func.getReference()),
                         .import_ns => |ns| try ctx.Error("Namespace '{s}' is not callable", .{ns}, func.func.getReference()),
-                        .function => |functype| {
+                        .function, .bound_method => {
+                            const functype: ast.TypeFunc = switch (t.base) {
+                                .function => |ft| ft,
+                                .bound_method => |ft| ft,
+                                else => unreachable,
+                            };
                             if (func.args.items.len != functype.argtypes.items.len)
                                 try ctx.Error("The function expects {d} arguments, but got {d}", .{ functype.argtypes.items.len, func.args.items.len }, func.func.getReference());
                             // We can build the current function version, which shall have to be compiled later
                             var func_version = try getFuncallVersion(func, functype, ctx, allocator);
-                            const ret_type = t.base.function.retype.base;
-                            if (ret_type == .name and analyser.typeparamContains(t.base.function.typeparam, ret_type.name)) {
+                            const ret_type = functype.retype.base;
+                            if (ret_type == .name and analyser.typeparamContains(functype.typeparam, ret_type.name)) {
                                 if (!func_version.contains(ret_type.name))
                                     try ctx.Error("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, func.func.getReference());
                                 break :blk func_version.get(ret_type.name).?;
@@ -300,10 +332,10 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
                                 const resolved_generic = ast.TypeGeneric{ .name = ret_type.generic.name, .params = resolved_params };
                                 const spec_name = try analyser.ensureGenericSpecialization(resolved_generic, ctx, allocator);
                                 const resolved = try allocator.create(ast.Type);
-                                resolved.* = ast.Type{ .base = .{ .name = spec_name }, .err = t.base.function.retype.err, .references = 0 };
+                                resolved.* = ast.Type{ .base = .{ .name = spec_name }, .err = functype.retype.err, .references = 0 };
                                 break :blk Type{ .decided = resolved };
                             }
-                            break :blk Type{ .decided = t.base.function.retype };
+                            break :blk Type{ .decided = functype.retype };
                         },
                     }
                 },
@@ -403,7 +435,7 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
                     .generic => |g| try analyser.ensureGenericSpecialization(g, ctx, allocator),
                     .buffer => unreachable,
                     .import_ns => unreachable, // handled above
-                    .function => {
+                    .function, .bound_method => {
                         try ctx.Error("Cannot access attribute of a function type", .{}, uop_right.reference);
                         unreachable;
                     },
@@ -411,7 +443,19 @@ pub fn getTypeOfValue(value: *ast.Value, ctx: *Context, allocator: Allocator) (s
                 if (!ctx.typeDefExist(struct_name)) {
                     try ctx.Error("Unknown struct type name '{s}'", .{struct_name}, uop_right.reference);
                 }
-                return Type{ .decided = ctx.getTypeDef(struct_name).getHabitant(attr) };
+                const hab_type = ctx.getTypeDef(struct_name).getHabitant(attr);
+                // If the attribute is a method (function type on a struct), produce a bound_method
+                // type so the codegen knows to create a heap-allocated {_count, receiver, free_fn} object.
+                if (hab_type.base == .function and ctx.getTypeDef(struct_name).methods.contains(attr)) {
+                    const bm_type = try allocator.create(ast.Type);
+                    bm_type.* = ast.Type{
+                        .base = .{ .bound_method = hab_type.base.function },
+                        .err = hab_type.err,
+                        .references = hab_type.references,
+                    };
+                    return Type{ .decided = bm_type };
+                }
+                return Type{ .decided = hab_type };
             } else {
                 unreachable;
             }
@@ -562,13 +606,18 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
         .buffer => try ctx.Error("A buffer is not callable", .{}, value.func.getReference()),
         .generic => |g| try ctx.Error("The generic type '{s}' is not callable", .{g.name}, value.func.getReference()),
         .import_ns => |ns| try ctx.Error("The namespace '{s}' is not callable (did you mean to access a member?)", .{ns}, value.func.getReference()),
-        .function => {},
+        .function, .bound_method => {},
     }
-    const signature = function_type.decided.base.function;
+    const signature: ast.TypeFunc = switch (function_type.decided.base) {
+        .function => |ft| ft,
+        .bound_method => |ft| ft,
+        else => unreachable,
+    };
     var func_version = std.hash_map.StringHashMap(Type).init(allocator);
     if (value.args.items.len != signature.argtypes.items.len)
         try ctx.Error("The number of arguments ({d}) does not match the function's ({d})", .{ value.args.items.len, signature.argtypes.items.len }, value.func.getReference());
-    for (value.args.items, signature.argtypes.items) |arg, t| {
+    for (value.args.items, signature.argtypes.items) |arg, t_before_error| {
+        const t = try wrapSetErr(t_before_error, allocator, expType.decided.err);
         const argtype = try getTypeOfValue(arg, ctx, allocator);
         const is_type_param = t.base == .name and analyser.typeparamContains(signature.typeparam, t.base.name);
         const is_buffer_of_type_param = t.base == .buffer and
@@ -629,6 +678,20 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
                         }
                     }
                 }
+            } else if (any_tp and argtype == .decided and argtype.decided.base == .generic) {
+                // Arg type is already stored as .generic (e.g. Pair<Int> from a generic return).
+                // Bind type params directly from matching generic params.
+                const arg_gen = argtype.decided.base.generic;
+                if (std.mem.eql(u8, arg_gen.name, generic.name)) {
+                    for (generic.params.items, 0..) |param, i| {
+                        if (param.base != .name) continue;
+                        const func_tp_name = param.base.name;
+                        if (!analyser.typeparamContains(signature.typeparam, func_tp_name)) continue;
+                        if (i >= arg_gen.params.items.len) continue;
+                        if (!func_version.contains(func_tp_name))
+                            try func_version.put(func_tp_name, Type{ .decided = arg_gen.params.items[i] });
+                    }
+                }
             }
             // Infer with the resolved type
             const resolved = try analyser.resolveType(t, &func_version, ctx, allocator);
@@ -650,7 +713,7 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
             try ctx.Error("Unable to infer the type to type parameter '{s}'", .{ret_type.name}, value.func.getReference());
 
         if (!func_version.get(ret_type.name).?.match(expType.decided))
-            try ctx.Error("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, value.func.getReference());
+            try ctx.Error("Expected type {s}, but the function '{s}' returns type {s}", .{ expType.toString(allocator), signature.fname, signature.retype.toString(allocator) }, value.func.getReference());
     } else if (ret_type == .generic) {
         var resolved_params = ArrayList(*ast.Type).init(allocator);
         for (ret_type.generic.params.items) |param| {
@@ -665,9 +728,9 @@ pub fn inferTypeFuncall(value: *ast.Funcall, ctx: *Context, allocator: Allocator
         const resolved_type = try allocator.create(ast.Type);
         resolved_type.* = ast.Type{ .base = .{ .name = spec_name }, .err = signature.retype.err, .references = 0 };
         if (!expType.match(resolved_type))
-            try ctx.Error("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), spec_name }, value.func.getReference());
+            try ctx.Error("Expected type {s}, but the function '{s}' returns type {s}", .{ expType.toString(allocator), signature.fname, spec_name }, value.func.getReference());
     } else if (!signature.retype.match(expType.decided))
-        try ctx.Error("Expected type {s}, but the function returns type {s}", .{ expType.toString(allocator), signature.retype.toString(allocator) }, value.func.getReference());
+        try ctx.Error("Expected type {s}, but the function '{s}' returns type {s}", .{ expType.toString(allocator), signature.fname, signature.retype.toString(allocator) }, value.func.getReference());
 
     try ctx.addFunctionToCompile(analyser.functionVersion{
         .name = signature.fname,
@@ -705,8 +768,9 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                     if (func.signature.argtypes.items.len != 1)
                         try ctx.Error("The function {s} does not have enough arguments", .{func.name}, rhsValue.getReference());
                     const arg_type = func.signature.argtypes.items[0];
-                    if (rhsType.match(arg_type))
-                        //try ctx.Error("The types of the argument and the value does not match, expected '{s}' got '{s}'", .{ arg_type.toString(allocator), rhsType.toString(allocator) }, "");
+                    // Strip error flag for compatibility — errors propagate to result
+                    const rhs_bare = try duplicateWithErrorUnion(allocator, rhsType.decided, false);
+                    if ((Type{ .decided = rhs_bare.decided }).match(arg_type))
                         found = true;
                 },
                 .undecided => |rhs_traits| {
@@ -773,7 +837,8 @@ pub fn inferTypeBinOperation(lhsValue: *ast.Value, rhsValue: *ast.Value, op: ast
                             if (func.signature.argtypes.items.len != 1)
                                 continue;
                             const arg_type = func.signature.argtypes.items[0];
-                            if (rhsType.match(arg_type)) {
+                            const rhs_bare = try duplicateWithErrorUnion(allocator, rhsType.decided, false);
+                            if ((Type{ .decided = rhs_bare.decided }).match(arg_type)) {
                                 selected_func = func;
                                 break;
                             }
@@ -841,10 +906,12 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 rhs_type.err = false;
                 break :blk Type{ .decided = rhs_type };
             } else expType; // We can just set it without copying, it's alright
+            // Function identifiers are valid as first-class values.
+            // Their type (carrying fname) lets call sites resolve correctly.
             if (ctx.functionExist(ident.name)) {
                 const f_type = Type{ .decided = try analyser.createFunctionSignature(ctx.getFunction(ident.name), allocator) };
                 if (!f_type.matchType(real_exp_type))
-                    try ctx.Error("The expected type {s} does not match the type of '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, ctx.getVariable(ident.name).toString(allocator) }, ident.reference);
+                    try ctx.Error("The expected type {s} does not match function '{s}': {s}", .{ real_exp_type.toString(allocator), ident.name, f_type.toString(allocator) }, ident.reference);
                 return;
             }
             if (ctx.isNamespace(ident.name)) return; // namespace identifier: valid without variable slot
@@ -1064,10 +1131,13 @@ pub fn inferTypeValue(value: *ast.Value, ctx: *Context, allocator: Allocator, ex
                 const left_value = try analyser.analyseValue(uop_right.expr, ctx, allocator);
                 if (left_value == .undecided)
                     try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
-                // Namespace member access (file import or inbuilt lib): no struct inference needed.
-                if (left_value.decided.base == .import_ns) return;
-                if (!ctx.typeDefExist(left_value.decided.base.name))
-                    try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference);
+                switch (left_value.decided.base) {
+                    .import_ns => return, // Namespace member access: no struct inference needed
+                    .buffer => return, // Buffer: ._size / ._count are built-in, no struct inference needed
+                    .name => |n| if (!ctx.typeDefExist(n))
+                        try ctx.Error("Can't decide the left part of this unary operator, and can't infer a type", .{}, uop_right.reference),
+                    else => {},
+                }
             } else {
                 unreachable;
             }

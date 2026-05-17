@@ -45,6 +45,7 @@ pub const TokenType = enum {
     PLUS,
     DIV,
     MINUS,
+    MODULUS,
     AND,
     OR,
 
@@ -108,6 +109,7 @@ pub const TokenType = enum {
             .PLUS => "+",
             .DIV => "/",
             .MINUS => "-",
+            .MODULUS => "%",
             .AND => "&&",
             .OR => "||",
             .DOT => ".",
@@ -490,6 +492,7 @@ fn parseOperator(reader: *Reader) !Token {
             '?' => Token{ .type = TokenType.QUEST, .value = "?", .location = reader.getCurrentLocation() },
             '*' => Token{ .type = TokenType.TIMES, .value = "*", .location = reader.getCurrentLocation() },
             '/' => Token{ .type = TokenType.DIV, .value = "/", .location = reader.getCurrentLocation() },
+            '%' => Token{ .type = TokenType.MODULUS, .value = "%", .location = reader.getCurrentLocation() },
             '+' => Token{ .type = TokenType.PLUS, .value = "+", .location = reader.getCurrentLocation() },
             '-' => Token{ .type = TokenType.MINUS, .value = "-", .location = reader.getCurrentLocation() },
             '>' => Token{ .type = TokenType.MORE_THAN, .value = ">", .location = reader.getCurrentLocation() },

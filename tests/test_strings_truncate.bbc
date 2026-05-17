@@ -1,0 +1,7 @@
+import("strings") as strings
+
+func main() !Int {
+    let s = "hello"
+    println(strings.truncate(s, 1, 4))
+    0
+}

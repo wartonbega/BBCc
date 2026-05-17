@@ -1,0 +1,20 @@
+import("../bbc-lib/Strings.bbc")
+
+func countChars(String s) !Int {
+    let n = 0
+    for c: stringIterator(s)
+        n = n + 1
+    n
+}
+
+func main() !Int {
+    let s = "hello"
+    let n = countChars(s)
+    println(n)
+
+    for c: stringIterator(s)
+        print(c)
+    println('')
+
+    0
+}

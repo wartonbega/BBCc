@@ -1,0 +1,26 @@
+func main() Int {
+    let t = true
+    let f = false
+
+    println(not t)
+    println(not f)
+    println(not true)
+    println(not false)
+
+    println(t && t)
+    println(t && f)
+    println(f && t)
+    println(f && f)
+
+    println(t || t)
+    println(t || f)
+    println(f || t)
+    println(f || f)
+
+    let x = 5
+    println(x > 3 && x < 10)
+    println(x < 0 || x > 4)
+    println(not (x == 5))
+
+    1
+}

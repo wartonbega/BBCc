@@ -10,6 +10,8 @@ const Parser = @import("../parser.zig");
 
 const math_lib = @import("inbuilt/math.zig");
 const os_lib = @import("inbuilt/os.zig");
+const cast_lib = @import("inbuilt/cast.zig");
+const strings_lib = @import("inbuilt/strings.zig");
 
 const Context = Itpr.Context;
 const Value = Values.Value;
@@ -23,6 +25,10 @@ pub fn dispatchBuiltin(name: []const u8, args: std.ArrayList(Values.Value), ctx:
             return math_lib.dispatch(func, args.items, ctx, reference);
         if (std.mem.eql(u8, lib, "os"))
             return os_lib.dispatch(func, args.items, ctx, reference);
+        if (std.mem.eql(u8, lib, "cast"))
+            return cast_lib.dispatch(func, args.items, ctx, reference);
+        if (std.mem.eql(u8, lib, "strings"))
+            return strings_lib.dispatch(func, args.items, ctx, reference);
         return try Values.makeError(ctx.heap, reference, "Unknown builtin library '{s}'", .{lib});
     }
     if (std.mem.eql(u8, name, "input")) {
@@ -79,7 +85,128 @@ pub fn dispatchBuiltin(name: []const u8, args: std.ArrayList(Values.Value), ctx:
                 .{@tagName(args.items[0])},
             ),
         };
-    } else {
-        return try Values.makeError(ctx.heap, reference, "Unknown builtin function '{s}'", .{name});
+    } else if (std.mem.eql(u8, name, "min")) {
+        if (args.items.len == 0)
+            return try Values.makeError(ctx.heap, reference, "min expects at least 1 argument", .{});
+        return switch (args.items[0]) {
+            .Int => |first| blk: {
+                var result = first;
+                for (args.items[1..]) |arg| {
+                    if (arg != .Int)
+                        break :blk try Values.makeError(ctx.heap, reference, "min: type mismatch", .{});
+                    result = @min(result, arg.Int);
+                }
+                break :blk Value{ .Int = result };
+            },
+            .Char => |first| blk: {
+                var result = first;
+                for (args.items[1..]) |arg| {
+                    if (arg != .Char)
+                        break :blk try Values.makeError(ctx.heap, reference, "min: type mismatch", .{});
+                    result = @min(result, arg.Char);
+                }
+                break :blk Value{ .Char = result };
+            },
+            .Float => |first| blk: {
+                var result = first;
+                for (args.items[1..]) |arg| {
+                    if (arg != .Float)
+                        break :blk try Values.makeError(ctx.heap, reference, "min: type mismatch", .{});
+                    result = @min(result, arg.Float);
+                }
+                break :blk Value{ .Float = result };
+            },
+            .Buffer => |buf| blk: {
+                if (args.items.len != 1)
+                    break :blk try Values.makeError(ctx.heap, reference, "min: buffer overload takes exactly 1 argument", .{});
+                if (buf.size == 0)
+                    break :blk try Values.makeError(ctx.heap, reference, "min: cannot find min of empty buffer", .{});
+                const first = buf.content[0] orelse break :blk try Values.makeError(ctx.heap, reference, "min: buffer has uninitialized elements", .{});
+                switch (first) {
+                    .Int => {
+                        var result = first.Int;
+                        for (1..buf.size) |i| {
+                            const elem = buf.content[i] orelse break :blk try Values.makeError(ctx.heap, reference, "min: buffer has uninitialized elements", .{});
+                            if (elem != .Int) break :blk try Values.makeError(ctx.heap, reference, "min: mixed types in buffer", .{});
+                            result = @min(result, elem.Int);
+                        }
+                        break :blk Value{ .Int = result };
+                    },
+                    .Char => {
+                        var result = first.Char;
+                        for (1..buf.size) |i| {
+                            const elem = buf.content[i] orelse break :blk try Values.makeError(ctx.heap, reference, "min: buffer has uninitialized elements", .{});
+                            if (elem != .Char) break :blk try Values.makeError(ctx.heap, reference, "min: mixed types in buffer", .{});
+                            result = @min(result, elem.Char);
+                        }
+                        break :blk Value{ .Char = result };
+                    },
+                    else => break :blk try Values.makeError(ctx.heap, reference, "min: unsupported element type {s}", .{@tagName(first)}),
+                }
+            },
+            else => try Values.makeError(ctx.heap, reference, "min: unsupported type {s}", .{@tagName(args.items[0])}),
+        };
+    } else if (std.mem.eql(u8, name, "max")) {
+        if (args.items.len == 0)
+            return try Values.makeError(ctx.heap, reference, "max expects at least 1 argument", .{});
+        return switch (args.items[0]) {
+            .Int => |first| blk: {
+                var result = first;
+                for (args.items[1..]) |arg| {
+                    if (arg != .Int)
+                        break :blk try Values.makeError(ctx.heap, reference, "max: type mismatch", .{});
+                    result = @max(result, arg.Int);
+                }
+                break :blk Value{ .Int = result };
+            },
+            .Char => |first| blk: {
+                var result = first;
+                for (args.items[1..]) |arg| {
+                    if (arg != .Char)
+                        break :blk try Values.makeError(ctx.heap, reference, "max: type mismatch", .{});
+                    result = @max(result, arg.Char);
+                }
+                break :blk Value{ .Char = result };
+            },
+            .Float => |first| blk: {
+                var result = first;
+                for (args.items[1..]) |arg| {
+                    if (arg != .Float)
+                        break :blk try Values.makeError(ctx.heap, reference, "max: type mismatch", .{});
+                    result = @max(result, arg.Float);
+                }
+                break :blk Value{ .Float = result };
+            },
+            .Buffer => |buf| blk: {
+                if (args.items.len != 1)
+                    break :blk try Values.makeError(ctx.heap, reference, "max: buffer overload takes exactly 1 argument", .{});
+                if (buf.size == 0)
+                    break :blk try Values.makeError(ctx.heap, reference, "max: cannot find max of empty buffer", .{});
+                const first = buf.content[0] orelse break :blk try Values.makeError(ctx.heap, reference, "max: buffer has uninitialized elements", .{});
+                switch (first) {
+                    .Int => {
+                        var result = first.Int;
+                        for (1..buf.size) |i| {
+                            const elem = buf.content[i] orelse break :blk try Values.makeError(ctx.heap, reference, "max: buffer has uninitialized elements", .{});
+                            if (elem != .Int) break :blk try Values.makeError(ctx.heap, reference, "max: mixed types in buffer", .{});
+                            result = @max(result, elem.Int);
+                        }
+                        break :blk Value{ .Int = result };
+                    },
+                    .Char => {
+                        var result = first.Char;
+                        for (1..buf.size) |i| {
+                            const elem = buf.content[i] orelse break :blk try Values.makeError(ctx.heap, reference, "max: buffer has uninitialized elements", .{});
+                            if (elem != .Char) break :blk try Values.makeError(ctx.heap, reference, "max: mixed types in buffer", .{});
+                            result = @max(result, elem.Char);
+                        }
+                        break :blk Value{ .Char = result };
+                    },
+                    else => break :blk try Values.makeError(ctx.heap, reference, "max: unsupported element type {s}", .{@tagName(first)}),
+                }
+            },
+            else => try Values.makeError(ctx.heap, reference, "max: unsupported type {s}", .{@tagName(args.items[0])}),
+        };
     }
+    return try Values.makeError(ctx.heap, reference, "Unknown builtin function '{s}'", .{name});
 }

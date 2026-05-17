@@ -1,0 +1,12 @@
+// Test that errors raised mid-scope are caught by the enclosing ? err handler.
+// "hello" must NOT be printed — execution skips remaining statements.
+func main() !Int {
+    let a = {
+        let b = 1 / 0
+        println("hello")
+        19
+    } ? err 20
+
+    println(a)
+    0
+}

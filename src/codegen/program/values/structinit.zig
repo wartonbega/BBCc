@@ -12,6 +12,7 @@ const Instruction = Inst.Instruction;
 const Compiler = @import("../../compiler.zig").Compiler;
 
 const codegen = @import("../codegenprog.zig");
+const gc = @import("../gc.zig");
 
 pub fn codegenStructinit(stcinit: *Ast.StructInit, compiler: *Compiler, cctx: *analyser.Context) !void {
     const alloc_size = @as(usize, stcinit.habitants.count()) + 2;
@@ -26,7 +27,7 @@ pub fn codegenStructinit(stcinit: *Ast.StructInit, compiler: *Compiler, cctx: *a
             compiler.incrementStackOffset();
         }
     }
-    try compiler.addInstruction(.{ .malloc = .{
+    try compiler.addInstruction(.{ .alloc = .{
         .size = alloc_size * 8,
         .stack_size = @intCast(compiler.stack_size),
     } });
@@ -82,6 +83,13 @@ pub fn codegenStructinit(stcinit: *Ast.StructInit, compiler: *Compiler, cctx: *a
                 },
             },
         } });
+        // GC Section E: increment refcount of heap-typed field values so the
+        // struct owns a reference.  The matching dec is in the struct destructor.
+        const field_ast_type = stc_def.getHabitant(hab.key_ptr.*);
+        const field_bbc_type = bbcTypes.Type{ .decided = field_ast_type };
+        if (gc.shouldGcDecVar(field_bbc_type, cctx)) {
+            try gc.emitGcInc(hab_reg, compiler);
+        }
         try compiler.registerTable.free(hab_idx_reg);
     }
 

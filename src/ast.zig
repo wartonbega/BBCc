@@ -37,6 +37,7 @@ pub const TypeGeneric = struct {
 pub const TypeBase = union(enum) {
     name: []const u8,
     function: TypeFunc,
+    bound_method: TypeFunc, // method captured with its receiver as a heap object {_count,receiver,receiver_free_fn}
     buffer: *Type, // element type
     generic: TypeGeneric, // e.g. List<Int>
     import_ns: []const u8, // a namespace/import value, e.g. the `math` in `import("math.bbc") as math`
@@ -71,7 +72,7 @@ pub const Type = struct {
                 }
                 std.debug.print(">", .{});
             },
-            .function => {},
+            .function, .bound_method => {},
             .import_ns => |ns| std.debug.print("Import({s})", .{ns}),
         }
     }
@@ -96,7 +97,7 @@ pub const Type = struct {
             .generic => |g| {
                 return g.specName(allocator);
             },
-            .function => |tfunc| {
+            .function, .bound_method => |tfunc| {
                 var args = std.fmt.allocPrint(allocator, "(", .{}) catch return "";
                 for (tfunc.argtypes.items, 0..) |arg, i| {
                     const argStr = arg.toString(allocator);
@@ -107,13 +108,16 @@ pub const Type = struct {
                     }) catch return "";
                 }
                 args = std.fmt.allocPrint(allocator, "{s})", .{args}) catch return "";
+                const prefix = if (self.base == .bound_method) "bound:" else "";
                 if (self.err) {
-                    return std.fmt.allocPrint(allocator, "!{s} -> {s}", .{
+                    return std.fmt.allocPrint(allocator, "!{s}{s} -> {s}", .{
+                        prefix,
                         args,
                         tfunc.retype.toString(allocator),
                     }) catch return "";
                 } else {
-                    return std.fmt.allocPrint(allocator, "{s} -> {s}", .{
+                    return std.fmt.allocPrint(allocator, "{s}{s} -> {s}", .{
+                        prefix,
                         args,
                         tfunc.retype.toString(allocator),
                     }) catch return "";
@@ -131,14 +135,14 @@ pub const Type = struct {
             .name => |name| switch (other.base) {
                 .name => |name2| std.mem.eql(u8, name, name2),
                 .generic => |g2| std.mem.eql(u8, name, g2.specName(std.heap.page_allocator)),
-                .function => false,
+                .function, .bound_method => false,
                 .buffer => false,
                 .import_ns => false,
             },
             .buffer => |elem| switch (other.base) {
                 .name => false,
                 .generic => false,
-                .function => false,
+                .function, .bound_method => false,
                 .import_ns => false,
                 .buffer => |elem2| elem.match(elem2),
             },
@@ -151,7 +155,7 @@ pub const Type = struct {
                         if (!p1.match(p2)) break :blk false;
                     break :blk true;
                 },
-                .function => false,
+                .function, .bound_method => false,
                 .buffer => false,
                 .import_ns => false,
             },
@@ -160,7 +164,26 @@ pub const Type = struct {
                 .generic => false,
                 .buffer => false,
                 .import_ns => false,
+                .bound_method => false,
                 .function => |f2| {
+                    if (!f1.retype.match(f2.retype))
+                        return false;
+                    if (f1.argtypes.items.len != f2.argtypes.items.len)
+                        return false;
+                    for (f1.argtypes.items, f2.argtypes.items) |a1, a2| {
+                        if (!a1.match(a2))
+                            return false;
+                    }
+                    return true;
+                },
+            },
+            .bound_method => |f1| switch (other.base) {
+                .name => false,
+                .generic => false,
+                .buffer => false,
+                .import_ns => false,
+                .function => false,
+                .bound_method => |f2| {
                     if (!f1.retype.match(f2.retype))
                         return false;
                     if (f1.argtypes.items.len != f2.argtypes.items.len)

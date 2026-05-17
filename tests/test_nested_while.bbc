@@ -1,0 +1,61 @@
+func countPairs(Int n) Int {
+    let count = 0
+    let i = 0
+    while i < n {
+        let j = 0
+        while j < n {
+            count = count + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    count
+}
+
+func matMulElement(Int ar, Int ac, Int br, Int bc) Int {
+    let sum = 0
+    let k = 0
+    while k < ac {
+        sum = sum + ar * bc
+        k = k + 1
+    }
+    sum
+}
+
+func sumDiag(Int n) Int {
+    let total = 0
+    let i = 0
+    while i < n {
+        let j = 0
+        while j < n {
+            if i == j {
+                total = total + i
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    total
+}
+
+func main() Int {
+    println(countPairs(3))
+    println(countPairs(5))
+
+    println(sumDiag(4))
+    println(sumDiag(1))
+
+    let i = 0
+    let outer = 0
+    while i < 3 {
+        let j = 0
+        while j < i {
+            outer = outer + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    println(outer)
+
+    1
+}

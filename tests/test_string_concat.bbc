@@ -1,0 +1,15 @@
+func main() Int {
+    let s = "hell"
+    s = s + 'o'
+    println(s._size)
+
+    let a = ""
+    let i = 0
+    while i < 3 {
+        a = a + 'x'
+        i = i + 1
+    }
+    println(a._size)
+
+    0
+}

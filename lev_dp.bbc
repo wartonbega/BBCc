@@ -1,0 +1,41 @@
+import("bbc-lib/Buffer.bbc") as buffer
+import("strings") as strings
+
+func levenshtein_dp(String a, String b) !Int {
+    let n = a._size
+    let m = b._size
+    let matrix = @[#[Int] (n + 1)]
+    let i = 0
+    while i <= n {
+        matrix[i] = @[#Int (m + 1)]
+        i = i + 1
+    }
+    i = 0
+    while i <= n {
+        matrix[i][0] = i
+        i = i + 1
+    }
+    let j = 0
+    while j <= m {
+        matrix[0][j] = j
+        j = j + 1
+    }
+    i = 1
+    while i <= n {
+        j = 1
+        while j <= m {
+            if a[i - 1] == b[j - 1] 
+                matrix[i][j] = matrix[i - 1][j - 1]
+            else 
+                matrix[i][j] = 1 + min(matrix[i - 1][j], matrix[i][j - 1], matrix[i - 1][j - 1])
+            j = j + 1
+        }
+        i = i + 1
+    }
+    matrix[n][m]
+}
+
+func main() !Int {
+    println(levenshtein_dp("abc", "ac"))
+    0
+}

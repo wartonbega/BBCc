@@ -1,0 +1,50 @@
+// GC stress: Buffer<Pair<Int,Int>> — exercises the specialized buffer
+// destructor that gc_decs each element on free.
+
+struct <A, B>Pair {
+    A first,
+    B second
+}
+
+func <A, B>makePair(A a, B b) Pair<A, B> {
+    @Pair{ first = a, second = b }
+}
+
+func <A, B>pairSum(Pair<A, B> p) Int {
+    p.first + p.second
+}
+
+func main() Int {
+    // Build a buffer of 5 Pair<Int,Int>, then read back.
+    let buf = @[#Pair<Int,Int> 5]
+    let i = 0
+    while i < 5 {
+        buf[i] = makePair(i, i * 2)
+        i = i + 1
+    }
+
+    let total = 0
+    i = 0
+    while i < 5 {
+        total = total + pairSum(buf[i])
+        i = i + 1
+    }
+    println(total)  // 0+0 + 1+2 + 2+4 + 3+6 + 4+8 = 30
+
+    // Overwrite slots — old Pairs must be gc_dec'd.
+    i = 0
+    while i < 5 {
+        buf[i] = makePair(10, i)
+        i = i + 1
+    }
+
+    total = 0
+    i = 0
+    while i < 5 {
+        total = total + pairSum(buf[i])
+        i = i + 1
+    }
+    println(total)  // 5*(10) + (0+1+2+3+4) = 60
+
+    1
+}

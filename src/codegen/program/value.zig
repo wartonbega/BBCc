@@ -19,12 +19,14 @@ pub fn codegenValue(value: *const Ast.Value, compiler: *Compiler, cctx: *analyse
         .intLit => |i| {
             try genValues.intlit.codegenIntlit(i.value, compiler, cctx);
         },
-        .floatLit => {},
+        .floatLit => |f| {
+            try genValues.floatlit.codegenFloatLit(f.value, compiler, cctx);
+        },
         .boolLit => |b| {
             try genValues.boollit.codegenBoollit(b.value, compiler, cctx);
         },
         .scope => |s| {
-            try codegen.scope.codegenScope(s, compiler, cctx);
+            try codegen.scope.codegenScope(s, compiler, false);
         },
         .binaryOperator => |binop| {
             try genValues.binop.codegenBinop(binop, compiler, cctx);
@@ -51,6 +53,42 @@ pub fn codegenValue(value: *const Ast.Value, compiler: *Compiler, cctx: *analyse
         .unaryOperatorRight => |uopr| {
             try genValues.unaryoperatorright.codegenUopRight(uopr, compiler, cctx);
         },
+        .Print => |p| {
+            try genValues.print.codegenPrint(p, compiler, cctx);
+        },
+        .While => |wl| {
+            try genValues.whileloop.codegenWhileLoop(wl, compiler, cctx);
+        },
+        .For => |fl| {
+            try genValues.forloop.codegenForLoop(fl, compiler, cctx);
+        },
+        .notOp => |n| {
+            try genValues.notop.codegenNotOp(n, compiler, cctx);
+        },
+        .stringLit => |s| {
+            try genValues.stringlit.codegenStringLit(s.value, compiler, cctx);
+        },
+        .charLit => |c| {
+            try genValues.charlit.codegenCharlit(c.value, compiler, cctx);
+        },
+        .bufferLit => |bl| {
+            try genValues.bufferlit.codegenBufferLit(bl, compiler, cctx);
+        },
+        .bufferIndex => |bi| {
+            try genValues.bufferindex.codegenBufferIndex(bi, compiler, cctx);
+        },
+        .bufferAlloc => |ba| {
+            try genValues.bufferalloc.codegenBufferAlloc(ba, compiler, cctx);
+        },
+        .freeKeyword => |fk| {
+            try genValues.freekeyword.codegenFreeKeyword(fk, compiler, cctx);
+        },
+        .errorCheck => |ec| {
+            try genValues.errorcheck.codegenErrorCheck(ec, compiler, cctx);
+        },
+        .function => |func| {
+            try genValues.identifier.codegenFunctionValue(func, compiler, cctx);
+        },
         else => unreachable,
     }
 }
@@ -62,6 +100,12 @@ pub fn codegenValueAdr(value: *const Ast.Value, compiler: *Compiler, cctx: *anal
         },
         .identifier => |ident| {
             try genValues.identifier.codegenIdentifierAdr(ident, compiler, cctx);
+        },
+        .unaryOperatorRight => |uopr| {
+            try genValues.unaryoperatorright.codegenUopRightAdr(uopr, compiler, cctx);
+        },
+        .bufferIndex => |bi| {
+            try genValues.bufferindex.codegenBufferIndexAdr(bi, compiler, cctx);
         },
         else => unreachable,
     }

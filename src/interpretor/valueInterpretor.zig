@@ -50,13 +50,16 @@ fn setVariableRhsAssign(lhs: *Ast.Value, ctx: *Context, value: Value) !void {
 
 pub fn interpreteBinOp(binop: *Ast.binaryOperation, ctx: *Context) !Values.Value {
     const lhs_value = try interpreteValue(binop.lhs, ctx);
-
+    if (lhs_value == .Error)
+        return lhs_value;
     if (binop.operator == .And or binop.operator == .Or) {
         return switch (binop.operator) {
             .Or => {
                 if (lhs_value.Bool)
                     return lhs_value;
                 const rhs_value = try interpreteValue(binop.rhs, ctx);
+                if (rhs_value == .Error)
+                    return rhs_value;
                 if (rhs_value.Bool)
                     return rhs_value;
                 return Value{ .Bool = false };
@@ -65,6 +68,8 @@ pub fn interpreteBinOp(binop: *Ast.binaryOperation, ctx: *Context) !Values.Value
                 if (!lhs_value.Bool)
                     return lhs_value;
                 const rhs_value = try interpreteValue(binop.rhs, ctx);
+                if (rhs_value == .Error)
+                    return rhs_value;
                 if (rhs_value.Bool)
                     return rhs_value;
                 return Value{ .Bool = false };
@@ -73,6 +78,8 @@ pub fn interpreteBinOp(binop: *Ast.binaryOperation, ctx: *Context) !Values.Value
         };
     }
     const rhs_value = try interpreteValue(binop.rhs, ctx);
+    if (rhs_value == .Error)
+        return rhs_value;
     defer lhs_value.checkReference(ctx.heap);
     defer rhs_value.checkReference(ctx.heap);
     return switch (binop.operator) {
@@ -146,8 +153,11 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
                 for (arguments.items) |arg| arg.checkReference(ctx.heap);
                 return builtin_ret;
             }
-            if (function != .Function)
+            if (function != .Function) {
+                std.debug.print("[Internal error]: Unknown function here {s}\n", .{funcall.func.getReference().toString()});
+                std.debug.print("[Internal error]: Found {s}\n", .{@tagName(function)});
                 return Itpr.ContextualError.UnknownFunction;
+            }
             var arguments = std.ArrayList(Values.Value).init(ctx.heap);
             defer arguments.deinit();
             for (funcall.args.items) |arg| {
@@ -222,6 +232,28 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
             iter_val.incrementReference();
             defer iter_val.decrementReference(ctx.heap);
 
+            var child_ctx = ctx.createChild();
+            try child_ctx.variables.ensureTotalCapacity(1);
+            defer child_ctx.deinit();
+
+            // Raw buffer: iterate by index
+            if (iter_val == .Buffer) {
+                const buf = iter_val.Buffer;
+                var idx: usize = 0;
+                while (idx < buf.size) : (idx += 1) {
+                    const elem = buf.content[idx] orelse continue;
+                    {
+                        var it = child_ctx.variables.iterator();
+                        while (it.next()) |v| v.value_ptr.decrementReference(child_ctx.heap);
+                        child_ctx.variables.clearRetainingCapacity();
+                    }
+                    elem.incrementReference();
+                    try child_ctx.setVariable(for_loop.var_name, elem);
+                    _ = try interpreteValue(for_loop.exec, &child_ctx);
+                }
+                return Values.Value{ .Null = {} };
+            }
+
             var empty_args = std.ArrayList(Values.Value).init(ctx.heap);
             defer empty_args.deinit();
 
@@ -230,9 +262,6 @@ pub fn interpreteValue(value: *Ast.Value, ctx: *Context) (Itpr.ContextualError |
             const next_fn = iter_val.getHabitant("next");
             next_fn.decrementReference(ctx.heap);
 
-            var child_ctx = ctx.createChild();
-            try child_ctx.variables.ensureTotalCapacity(1);
-            defer child_ctx.deinit();
             while (true) {
                 const is_last = try Itpr.interpreteFunction(is_last_fn.Function.func, empty_args, is_last_fn.Function.parentObj, ctx);
 
