@@ -82,6 +82,24 @@ pub const Register = enum {
     pub fn from(i: u64) Register {
         return @enumFromInt(i);
     }
+
+    pub fn x86Low8(self: Register) []const u8 {
+        return switch (self) {
+            .R0  => "al",
+            .R1  => "bl",
+            .R2  => "cl",
+            .R3  => "dl",
+            .R4  => "sil",
+            .R5  => "dil",
+            .R6  => "r8b",
+            .R7  => "r9b",
+            .R8  => "r10b",
+            .R9  => "r11b",
+            .R10 => "r12b",
+            .R11 => "r13b",
+            else => unreachable,
+        };
+    }
 };
 
 // ── x86-64 legacy top-level constants (still used by callers not yet migrated) ──
@@ -105,6 +123,28 @@ pub const CodeCondition = enum {
     GE, LE,
     NGE, NLE,
 };
+
+/// Return the logical negation of a condition code (for branch collapse optimizations).
+pub fn negate(cc: CodeCondition) CodeCondition {
+    return switch (cc) {
+        .E,   .Z   => .NE,
+        .NE,  .NZ  => .E,
+        .L,   .NGE => .GE,
+        .GE,  .NL  => .L,
+        .LE,  .NG  => .G,
+        .G,   .NLE => .LE,
+        .B,   .C,  .NAE => .AE,
+        .AE,  .NB, .NC  => .B,
+        .BE,  .NA  => .A,
+        .A,   .NBE => .BE,
+        .S    => .N,
+        .N    => .S,
+        .O    => .NO,
+        .NO   => .O,
+        .P,   .PE  => .NP,
+        .NP,  .PO  => .P,
+    };
+}
 
 const StatusFlags = enum { CF, PF, AF, ZF, SF, OF };
 
@@ -229,6 +269,9 @@ pub const Instruction = union(enum) {
     frame_enter: FRAME_ENTER,
     /// Arch-specific frame epilogue: x86-64 = `pop rbp; ret`; ARM64 = `ldp x29, x30, [sp], #16; ret`
     frame_leave: FRAME_LEAVE,
+    tst: TST,
+    /// Set byte on condition: x86-64 = `setCC dst_low8`; ARM64 = `cset dst, cc`
+    setcc: SETCC,
 
     pub fn toAsm(self: *const Instruction, writer: anytype, alloc: Allocator, arch: ArchConfig) !void {
         switch (self.*) {
@@ -266,6 +309,8 @@ pub const Instruction = union(enum) {
             .float_print     => |p| try p.toAsm(writer, alloc, arch),
             .frame_enter     => |p| try p.toAsm(writer, alloc, arch),
             .frame_leave     => |p| try p.toAsm(writer, alloc, arch),
+            .tst             => |p| try p.toAsm(writer, alloc, arch),
+            .setcc           => |p| try p.toAsm(writer, alloc, arch),
         }
         _ = try writer.write("\n");
     }
@@ -1045,6 +1090,32 @@ pub const FRAME_ENTER = struct {
                 try writer.print("\tstp x29, x30, [sp, #-16]!\n", .{});
                 try writer.print("\tmov x29, sp", .{});
             },
+        }
+    }
+};
+
+pub const TST = struct {
+    lhs: Register,
+    rhs: Register,
+
+    pub fn toAsm(self: *const TST, writer: anytype, alloc: Allocator, arch: ArchConfig) !void {
+        _ = alloc;
+        switch (arch.target) {
+            .x86_64 => try writer.print("\ttest {s}, {s}", .{ self.lhs.x86Reg(), self.rhs.x86Reg() }),
+            .arm64  => try writer.print("\ttst {s}, {s}", .{ self.lhs.arm64Reg(), self.rhs.arm64Reg() }),
+        }
+    }
+};
+
+pub const SETCC = struct {
+    dst: Register,
+    cc:  CodeCondition,
+
+    pub fn toAsm(self: *const SETCC, writer: anytype, alloc: Allocator, arch: ArchConfig) !void {
+        _ = alloc;
+        switch (arch.target) {
+            .x86_64 => try writer.print("\tset{s} {s}", .{ @tagName(self.cc), self.dst.x86Low8() }),
+            .arm64  => try writer.print("\tcset {s}, {s}", .{ self.dst.arm64Reg(), @tagName(self.cc) }),
         }
     }
 };

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const inst = @import("instructions.zig");
 const Compiler = @import("compiler.zig").Compiler;
+const optimizer = @import("optimizer.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -31,6 +32,10 @@ pub fn dumpAssemblyX86(compiler: *Compiler, entry_point: []const u8) !void {
         \\extern _putchar
         \\
     , .{entry_point});
+    const saved = try optimizer.optimize(&compiler.program, compiler.arch, alloc, compiler.opt_level);
+    if (compiler.show_stats)
+        std.log.info("optimizer: -{d} instructions  ({s})", .{ saved, @tagName(compiler.opt_level) });
+
     for (compiler.program.items) |instruction| {
         try instruction.toAsm(writer, alloc, compiler.arch);
     }

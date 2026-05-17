@@ -14,6 +14,23 @@ const Compiler = @import("../../compiler.zig").Compiler;
 const codegen = @import("../codegenprog.zig");
 const gc = @import("../gc.zig");
 
+fn argIsImmediate(arg: *const Ast.Value) bool {
+    return switch (arg.*) {
+        .intLit, .boolLit, .charLit, .nullLit => true,
+        else => false,
+    };
+}
+
+fn getImmediateValue(arg: *const Ast.Value) i64 {
+    return switch (arg.*) {
+        .intLit  => |v| @as(i64, v.value),
+        .boolLit => |v| if (v.value) 1 else 0,
+        .charLit => |v| @as(i64, v.value),
+        .nullLit => 0,
+        else     => unreachable,
+    };
+}
+
 pub fn codegenFuncall(f: *Ast.Funcall, compiler: *Compiler, cctx: *analyser.Context) !void {
     // Check whether this is a call to an inbuilt function (plain or namespace-qualified).
     // resolveInbuiltFunc handles both `min(...)` and `strings.truncate(...)`.
@@ -109,86 +126,115 @@ pub fn codegenFuncall(f: *Ast.Funcall, compiler: *Compiler, cctx: *analyser.Cont
         }
     }
 
-    // Save argument registers that are currently in use (will be clobbered by args).
-    var saved_regs = std.ArrayList(Inst.Register).init(compiler.allocator);
-    defer saved_regs.deinit();
-    for (arg_regs[0..used_arg_regs]) |reg| {
-        try compiler.addInstruction(.{ .push = .{ .reg = reg } });
-        try saved_regs.append(reg);
-    }
+    // Fast path: when all explicit args are compile-time constants and fit in registers,
+    // skip the push/pop stack dance and load directly into argument registers.
+    const all_immediate_fast_path = !is_method and
+        explicit_args <= arg_regs.len and
+        blk: {
+            for (f.args.items) |arg| {
+                if (!argIsImmediate(arg)) break :blk false;
+            }
+            break :blk true;
+        };
 
-    const stack_args = if (total_args > arg_regs.len) total_args - arg_regs.len else 0;
-    const total_stack = compiler.arch.push_size + stack_args * compiler.arch.push_size;
-    // ARM64: each push is 16 bytes so total_stack is always a multiple of 16 — no padding needed.
-    const needs_padding = if (compiler.arch.target == .arm64) false else (total_stack % 16) != 8;
-    if (needs_padding) {
-        try compiler.addInstruction(.{ .minus = .{ .lhs = .RSP, .rhs = .{ .immediate = 8 } } });
-    }
-
-    // Push explicit args in reverse order (last arg first).
-    for (0..explicit_args) |r_arg_idx| {
-        const arg_idx = explicit_args - 1 - r_arg_idx;
-        const arg = f.args.items[arg_idx];
-        try codegen.value.codegenValue(arg, compiler, cctx);
-        const arg_reg_idx = compiler.registerTable.lastReg().?;
-        const arg_reg = try compiler.registerTable.getValue(arg_reg_idx, compiler);
-        try compiler.addInstruction(.{ .push = .{ .reg = arg_reg } });
-        try compiler.registerTable.free(arg_reg_idx);
-    }
-
-    // For method calls, push the receiver (self) as the last positional arg.
-    // Stack layout after all pushes: [dummy][self/arg0][arg1]...[argN-1]
-    // For free/namespace calls, only explicit args are pushed (no self slot).
-    if (is_method) {
-        if (is_bound_method_var) {
-            // Receiver was pre-loaded into pre_recv_reg_idx before the live-reg snapshot.
-            const recv_r = try compiler.registerTable.getValue(pre_recv_reg_idx.?, compiler);
-            try compiler.addInstruction(.{ .push = .{ .reg = recv_r } });
-            try compiler.registerTable.free(pre_recv_reg_idx.?);
-        } else {
-            try codegen.value.codegenValue(f.func.unaryOperatorRight.expr, compiler, cctx);
-            const self_reg_idx = compiler.registerTable.lastReg().?;
-            const self_reg = try compiler.registerTable.getValue(self_reg_idx, compiler);
-            try compiler.addInstruction(.{ .push = .{ .reg = self_reg } });
-            try compiler.registerTable.free(self_reg_idx);
+    if (all_immediate_fast_path) {
+        for (f.args.items, 0..) |arg, idx| {
+            try compiler.addInstruction(.{ .load = .{
+                .from = .{ .immediate = getImmediateValue(arg) },
+                .to   = arg_regs[idx],
+            } });
         }
-    }
+        // The slow path produces an RSP delta of -(explicit_args+1)*8 before the call.
+        // The fast path only reserves the 1 dummy slot (-8). Compensate when the
+        // difference (explicit_args*8) is not a multiple of 16, i.e. explicit_args is odd.
+        const fast_needs_padding = compiler.arch.target != .arm64 and (explicit_args % 2 != 0);
+        const fast_sub: i64 = @intCast(compiler.arch.push_size +
+            if (fast_needs_padding) compiler.arch.push_size else 0);
+        try compiler.addInstruction(.{ .minus = .{ .lhs = .RSP, .rhs = .{ .immediate = fast_sub } } });
+        try compiler.addInstruction(.{ .call = .{ .value = .{ .label = f_uid } } });
+        try compiler.addInstruction(.{ .plus = .{ .lhs = .RSP, .rhs = .{ .immediate = fast_sub } } });
+    } else {
+        // Save argument registers that are currently in use (will be clobbered by args).
+        var saved_regs = std.ArrayList(Inst.Register).init(compiler.allocator);
+        defer saved_regs.deinit();
+        for (arg_regs[0..used_arg_regs]) |reg| {
+            try compiler.addInstruction(.{ .push = .{ .reg = reg } });
+            try saved_regs.append(reg);
+        }
 
-    // Push dummy 0 — sits at [rsp] so arg[0]/self is at [rsp+8], arg[1] at [rsp+16], etc.
-    try compiler.addInstruction(.{ .load = .{ .from = .{ .immediate = 0 }, .to = .R2 } });
-    try compiler.addInstruction(.{ .push = .{ .reg = .R2 } });
+        const stack_args = if (total_args > arg_regs.len) total_args - arg_regs.len else 0;
+        const total_stack = compiler.arch.push_size + stack_args * compiler.arch.push_size;
+        // ARM64: each push is 16 bytes so total_stack is always a multiple of 16 — no padding needed.
+        const needs_padding = if (compiler.arch.target == .arm64) false else (total_stack % 16) != 8;
+        if (needs_padding) {
+            try compiler.addInstruction(.{ .minus = .{ .lhs = .RSP, .rhs = .{ .immediate = 8 } } });
+        }
 
-    // Load in-register args from stack into argument registers.
-    const ps = compiler.arch.push_size;
-    for (0..used_arg_regs) |i| {
-        const offset: i64 = @intCast((i + 1) * ps);
-        try compiler.addInstruction(.{ .load = .{
-            .from = .{ .registerOffset = .{ .register = .RSP, .offset = offset } },
-            .to = arg_regs[i],
+        // Push explicit args in reverse order (last arg first).
+        for (0..explicit_args) |r_arg_idx| {
+            const arg_idx = explicit_args - 1 - r_arg_idx;
+            const arg = f.args.items[arg_idx];
+            try codegen.value.codegenValue(arg, compiler, cctx);
+            const arg_reg_idx = compiler.registerTable.lastReg().?;
+            const arg_reg = try compiler.registerTable.getValue(arg_reg_idx, compiler);
+            try compiler.addInstruction(.{ .push = .{ .reg = arg_reg } });
+            try compiler.registerTable.free(arg_reg_idx);
+        }
+
+        // For method calls, push the receiver (self) as the last positional arg.
+        // Stack layout after all pushes: [dummy][self/arg0][arg1]...[argN-1]
+        // For free/namespace calls, only explicit args are pushed (no self slot).
+        if (is_method) {
+            if (is_bound_method_var) {
+                // Receiver was pre-loaded into pre_recv_reg_idx before the live-reg snapshot.
+                const recv_r = try compiler.registerTable.getValue(pre_recv_reg_idx.?, compiler);
+                try compiler.addInstruction(.{ .push = .{ .reg = recv_r } });
+                try compiler.registerTable.free(pre_recv_reg_idx.?);
+            } else {
+                try codegen.value.codegenValue(f.func.unaryOperatorRight.expr, compiler, cctx);
+                const self_reg_idx = compiler.registerTable.lastReg().?;
+                const self_reg = try compiler.registerTable.getValue(self_reg_idx, compiler);
+                try compiler.addInstruction(.{ .push = .{ .reg = self_reg } });
+                try compiler.registerTable.free(self_reg_idx);
+            }
+        }
+
+        // Push dummy 0 — sits at [rsp] so arg[0]/self is at [rsp+8], arg[1] at [rsp+16], etc.
+        try compiler.addInstruction(.{ .load = .{ .from = .{ .immediate = 0 }, .to = .R2 } });
+        try compiler.addInstruction(.{ .push = .{ .reg = .R2 } });
+
+        // Load in-register args from stack into argument registers.
+        const ps = compiler.arch.push_size;
+        for (0..used_arg_regs) |i| {
+            const offset: i64 = @intCast((i + 1) * ps);
+            try compiler.addInstruction(.{ .load = .{
+                .from = .{ .registerOffset = .{ .register = .RSP, .offset = offset } },
+                .to = arg_regs[i],
+            } });
+        }
+        // Pop in-reg args + dummy off the stack.
+        try compiler.addInstruction(.{ .plus = .{
+            .lhs = .RSP,
+            .rhs = .{ .immediate = @intCast((used_arg_regs + 1) * ps) },
         } });
-    }
-    // Pop in-reg args + dummy off the stack.
-    try compiler.addInstruction(.{ .plus = .{
-        .lhs = .RSP,
-        .rhs = .{ .immediate = @intCast((used_arg_regs + 1) * ps) },
-    } });
-    // Reserve stack space for alignment without clobbering any argument register.
-    // Using .minus (sub sp/rsp, N) instead of a push avoids zeroing arg_regs[2] (R2/x2/rdx).
-    try compiler.addInstruction(.{ .minus = .{ .lhs = .RSP, .rhs = .{ .immediate = @intCast(compiler.arch.push_size) } } });
+        // Reserve stack space for alignment without clobbering any argument register.
+        // Using .minus (sub sp/rsp, N) instead of a push avoids zeroing arg_regs[2] (R2/x2/rdx).
+        try compiler.addInstruction(.{ .minus = .{ .lhs = .RSP, .rhs = .{ .immediate = @intCast(compiler.arch.push_size) } } });
 
-    try compiler.addInstruction(.{ .call = .{ .value = .{ .label = f_uid } } });
+        try compiler.addInstruction(.{ .call = .{ .value = .{ .label = f_uid } } });
 
-    // Remove dummy + any stack-passed args + optional alignment padding.
-    const cleanup: usize = ps + stack_args * ps + if (needs_padding) ps else 0;
-    if (cleanup > 0) {
-        try compiler.addInstruction(.{ .plus = .{ .lhs = .RSP, .rhs = .{ .immediate = @intCast(cleanup) } } });
-    }
+        // Remove dummy + any stack-passed args + optional alignment padding.
+        const cleanup: usize = ps + stack_args * ps + if (needs_padding) ps else 0;
+        if (cleanup > 0) {
+            try compiler.addInstruction(.{ .plus = .{ .lhs = .RSP, .rhs = .{ .immediate = @intCast(cleanup) } } });
+        }
 
-    // Restore saved argument registers in reverse order.
-    var i = saved_regs.items.len;
-    while (i > 0) {
-        i -= 1;
-        try compiler.addInstruction(.{ .pop = .{ .reg = saved_regs.items[i] } });
+        // Restore saved argument registers in reverse order.
+        var i = saved_regs.items.len;
+        while (i > 0) {
+            i -= 1;
+            try compiler.addInstruction(.{ .pop = .{ .reg = saved_regs.items[i] } });
+        }
     }
 
     // Restore extra live registers (pop in reverse push order).

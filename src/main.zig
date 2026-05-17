@@ -12,6 +12,7 @@ const x86 = @import("codegen/x86.zig");
 const arm64 = @import("codegen/arm64.zig");
 const Compiler = @import("codegen/compiler.zig").Compiler;
 const arch_mod = @import("codegen/arch.zig");
+const optimizer = @import("codegen/optimizer.zig");
 const build_options = @import("build_options");
 
 const std = @import("std");
@@ -26,12 +27,22 @@ pub fn main() !void {
     _ = argsIterator.next();
 
     var interprete_execute = false;
+    var opt_level: optimizer.OptLevel = .O2;
+    var show_stats: bool = false;
 
     var filename: []const u8 = "bbc-examples/basic_test.bbc";
     while (argsIterator.next()) |arg| {
         if (std.mem.eql(u8, arg, "-X")) {
             interprete_execute = true;
             std.log.info("Executing the program with the intepretor", .{});
+        } else if (std.mem.eql(u8, arg, "-O0")) {
+            opt_level = .O0;
+        } else if (std.mem.eql(u8, arg, "-O1")) {
+            opt_level = .O1;
+        } else if (std.mem.eql(u8, arg, "-O2")) {
+            opt_level = .O2;
+        } else if (std.mem.eql(u8, arg, "--stats")) {
+            show_stats = true;
         } else {
             filename = arg;
         }
@@ -55,6 +66,8 @@ pub fn main() !void {
         else
             arch_mod.ArchConfig.forX86_64();
         const compiler = try Compiler.init(alloc, arch);
+        compiler.opt_level = opt_level;
+        compiler.show_stats = show_stats;
         std.log.info("Compiling the program", .{});
         try codegen.generateProgram(prog, compiler, ctx);
         switch (arch.target) {

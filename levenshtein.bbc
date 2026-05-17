@@ -61,11 +61,9 @@ func levenshtein_dp(String a, String b) !Int {
 }
 
 func main() !Int {
-    let a = "Totqefnlq zj"
-    let b = "Tolo qzqz el"
-    // println(strings.truncate(a, 1, 4))
-    // Verify both ouputs are the same
-    println(levenshtein(a, b))
+    let a = "cazejfnzkefnert"
+    let b = "cuzezfnkzenffnt"
+    //println(levenshtein(a, b))
     println(levenshtein_dp(a, b))
     0
 }

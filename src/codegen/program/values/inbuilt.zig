@@ -216,7 +216,7 @@ fn codegenNamespaceInbuilt(
         const rs = &compiler.registerTable.states.items[li];
         if (rs.freed or rs.spilled) continue;
         var is_caller = false;
-        for (Inst.CALLER_SAVED) |cr| {
+        for (compiler.arch.caller_saved) |cr| {
             if (cr == rs.reg.?) { is_caller = true; break; }
         }
         if (!is_caller) continue;
@@ -226,6 +226,7 @@ fn codegenNamespaceInbuilt(
     }
 
     // Push args in reverse order, then pop into argument registers.
+    const arg_regs = compiler.arch.argument_regs;
     const n = args.len;
     for (0..n) |ri| {
         const ai = n - 1 - ri;
@@ -236,9 +237,9 @@ fn codegenNamespaceInbuilt(
         compiler.incrementStackOffset();
         try compiler.registerTable.free(a_idx);
     }
-    const n_regs = @min(n, Inst.ARGUMENT_REGS.len);
+    const n_regs = @min(n, arg_regs.len);
     for (0..n_regs) |i| {
-        try compiler.addInstruction(.{ .pop = .{ .reg = Inst.ARGUMENT_REGS[i] } });
+        try compiler.addInstruction(.{ .pop = .{ .reg = arg_regs[i] } });
         compiler.decrementStackOffset();
     }
 
@@ -250,8 +251,8 @@ fn codegenNamespaceInbuilt(
     for (0..n_regs) |i| {
         const a_type = try bbcTypes.getTypeOfValue(args[i], cctx, compiler.allocator);
         if (!gc_mod.shouldGcDecVar(a_type, cctx)) continue;
-        try gc_mod.emitGcInc(Inst.ARGUMENT_REGS[i], compiler);
-        try compiler.addInstruction(.{ .push = .{ .reg = Inst.ARGUMENT_REGS[i] } });
+        try gc_mod.emitGcInc(arg_regs[i], compiler);
+        try compiler.addInstruction(.{ .push = .{ .reg = arg_regs[i] } });
         compiler.incrementStackOffset();
         heap_arg_count += 1;
     }
@@ -262,10 +263,11 @@ fn codegenNamespaceInbuilt(
     // preserved — push it first so the offset-based loads can still find the heap
     // arg copies, then pop R0 back after all gc_dec calls.
     //
-    // Stack layout after pushing R0:
+    // Stack layout after pushing R0 (ps = push_size, 8 on x86-64 / 16 on arm64):
     //   [rsp+0]              = R0 (call result)
-    //   [rsp+8]              = last heap arg copy   (pushed last in Phase C)
-    //   [rsp+8+(n-1)*8]     = first heap arg copy  (pushed first in Phase C)
+    //   [rsp+ps]             = last heap arg copy   (pushed last in Phase C)
+    //   [rsp+ps+(n-1)*ps]   = first heap arg copy  (pushed first in Phase C)
+    const ps: i64 = @intCast(compiler.arch.push_size);
     if (heap_arg_count > 0) {
         try compiler.addInstruction(.{ .push = .{ .reg = .R0 } });
         compiler.incrementStackOffset();
@@ -277,8 +279,8 @@ fn codegenNamespaceInbuilt(
             const a_type = try bbcTypes.getTypeOfValue(args[si], cctx, compiler.allocator);
             if (!gc_mod.shouldGcDecVar(a_type, cctx)) continue;
             pending -= 1;
-            // +8 to skip past the pushed R0; further offset into the heap arg copies.
-            const stack_offset: i64 = @intCast(8 + (heap_arg_count - 1 - pending) * 8);
+            // +ps to skip past the pushed R0; further offset into the heap arg copies.
+            const stack_offset: i64 = ps + @as(i64, @intCast(heap_arg_count - 1 - pending)) * ps;
             const tmp = try compiler.registerTable.allocate(compiler);
             const tmp_reg = try compiler.registerTable.getValue(tmp, compiler);
             try compiler.addInstruction(.{ .load = .{
@@ -296,7 +298,7 @@ fn codegenNamespaceInbuilt(
         // Clean up heap arg copies from the stack.
         try compiler.addInstruction(.{ .plus = .{
             .lhs = .RSP,
-            .rhs = .{ .immediate = @intCast(heap_arg_count * 8) },
+            .rhs = .{ .immediate = @as(i64, @intCast(heap_arg_count)) * ps },
         } });
         for (0..heap_arg_count) |_| compiler.decrementStackOffset();
     }

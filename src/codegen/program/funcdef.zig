@@ -211,7 +211,10 @@ pub fn codegenFuncdef(func: *const analyser.functionVersion, compiler: *Compiler
     try compiler.addInstruction(.{ .load = .{ .from = .{ .register = .RBP }, .to = .RSP } });
     // Reserve full frame + 1 slot for saving rax (ErrorObj*).
     // All arg + body local slots live at [rbp - slot*8] within aligned_total_slots.
-    const err_reserve: i64 = @intCast(aligned_total_slots + 1);
+    // +1 slot to save the ErrorObj pointer; round up to even so sub sp stays
+    // 16-byte aligned on ARM64 (aligned_total_slots is even, +1 would be odd).
+    const err_reserve_raw: i64 = @intCast(aligned_total_slots + 1);
+    const err_reserve: i64 = if (@mod(err_reserve_raw, 2) != 0) err_reserve_raw + 1 else err_reserve_raw;
     try compiler.addInstruction(.{ .minus = .{
         .lhs = .RSP,
         .rhs = .{ .immediate = err_reserve * 8 },

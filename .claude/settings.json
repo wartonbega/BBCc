@@ -42,7 +42,9 @@
       "Bash(git stash *)",
       "Bash(./zig-out/bin/bbc test5.bbc)",
       "Bash(nasm -f macho64 output.asm -o /tmp/t5_old.o)",
-      "Bash(./zig-out/bin/bbc test.bbc)"
+      "Bash(./zig-out/bin/bbc test.bbc)",
+      "Bash(./zig-out/bin/bbc tests/test_arithmetic.bbc)",
+      "Bash(as output.asm -o output.o)"
     ]
   }
 }

@@ -9,8 +9,8 @@ def levenstein(a, b):
     
 
 def main():
-    a = "Totqefnlq zj"
-    b = "Tolo qzqz el"
+    a = "cazejfnzkefnert"
+    b = "cuzezfnkzenffnt"
     print(levenstein(a, b))
 
 if __name__ == "__main__":

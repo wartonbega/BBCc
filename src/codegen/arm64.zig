@@ -1,6 +1,7 @@
 const std = @import("std");
 const inst = @import("instructions.zig");
 const Compiler = @import("compiler.zig").Compiler;
+const optimizer = @import("optimizer.zig");
 
 pub fn dumpAssemblyArm64(compiler: *Compiler, entry_point: []const u8) !void {
     const file = try std.fs.cwd().createFile(
@@ -20,6 +21,10 @@ pub fn dumpAssemblyArm64(compiler: *Compiler, entry_point: []const u8) !void {
         \\.globl {s}
         \\
     , .{entry_point});
+
+    const saved = try optimizer.optimize(&compiler.program, compiler.arch, alloc, compiler.opt_level);
+    if (compiler.show_stats)
+        std.log.info("optimizer: -{d} instructions  ({s})", .{ saved, @tagName(compiler.opt_level) });
 
     for (compiler.program.items) |instruction| {
         try instruction.toAsm(writer, alloc, compiler.arch);

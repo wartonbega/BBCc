@@ -3,6 +3,7 @@ const inst = @import("instructions.zig");
 const arch_mod = @import("arch.zig");
 const regTable = @import("registerTable.zig");
 const analyser = @import("../analyser.zig");
+const optimizer = @import("optimizer.zig");
 
 pub const FloatConst = struct { label: []const u8, bits: u64 };
 
@@ -19,6 +20,9 @@ pub const Compiler = struct {
 
     // Float literal constants accumulated during codegen; emitted into .data by x86.zig.
     float_constants: std.ArrayList(FloatConst),
+
+    opt_level: optimizer.OptLevel = .O2,
+    show_stats: bool = false,
 
     stack_size: i64 = 0,
     // True when the current function's return type has `.err == true` (!T).
